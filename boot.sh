@@ -2,13 +2,9 @@
 set -x # echo on
 
 source env.sh
-
 make discovery-url
 vagrant up
-eval `ssh-agent -s`
-ssh-add ~/.vagrant.d/insecure_private_key
-ssh-add $DEIS_PLATFORM_SSH_PRIVATE_KEY
-ssh-add -l
+source ssh-env.sh
 deisctl config platform set sshPrivateKey=$DEIS_PLATFORM_SSH_PRIVATE_KEY
 deisctl config platform set domain=$DEIS_DOMAIN
 deisctl install platform
