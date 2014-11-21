@@ -1,4 +1,5 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
+set -x # echo on
 
 make discovery-url
 vagrant up
@@ -21,4 +22,4 @@ DEIS_SUPERUSER_PASSWD="deeznuts"
 DEIS_SUPERUSER_EMAIL="drew@blackhole.com"
 DEIS_SUPERUSER_SSHPUBLIC_KEY="~/.ssh/id_rsa.pub"
 deis register http://deis.local3.deisapp.com --username="$DEIS_SUPERUSER_NAME" --password="$DEIS_SUPERUSER_PASSWD" --email="$DEIS_SUPERUSER_EMAIL"
-deis keys:add $DEISSUPERUSER_SSHPUBLIC_KEY
+deis keys:add $DEIS_SUPERUSER_SSHPUBLIC_KEY
