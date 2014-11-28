@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 export DEIS_DOMAIN="local3.deisapp.com"
 export DEISCTL_TUNNEL=deis.$DEIS_DOMAIN
+export DEIS_CONTROLLER_URL="http://deis.local3.deisapp.com"
 export DEIS_PLATFORM_SSH_PRIVATE_KEY=~/.ssh/deis
 export DEIS_SUPERUSER_NAME="drew"
 export DEIS_SUPERUSER_PASSWD="deeznuts"
