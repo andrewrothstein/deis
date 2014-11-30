@@ -2,7 +2,7 @@
 export DEIS_DOMAIN="deis.dev"
 export DEISCTL_TUNNEL="controller.deis.dev"
 export FLEETCTL_TUNNEL=$DEISCTL_TUNNEL
-export DEIS_CONTROLLER_URL="http://controller.deis.dev"
+export DEIS_CONTROLLER_URL="http://controller.deis.dev:8000"
 export DEIS_PLATFORM_SSH_PRIVATE_KEY=~/.ssh/deis
 export DEIS_SUPERUSER_NAME="drew"
 export DEIS_SUPERUSER_PASSWD="deezNut$"
