@@ -1,7 +1,7 @@
 #!/usr/bin/env/ bash
 
 # example for registering a user
-deis register http://deis.local3.deisapp.com \
+deis register $DEIS_CONTROLLER \
      --username="$DEIS_SUPERUSER_NAME" \
      --password="$DEIS_SUPERUSER_PASSWD" \
      --email="$DEIS_SUPERUSER_EMAIL"
