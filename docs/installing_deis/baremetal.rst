@@ -16,7 +16,7 @@ machine running entirely from RAM. Then, you can `install CoreOS to disk`_.
 
 .. important::
 
-    Deis requires CoreOS version 472.0.0 or more recent.
+    Deis runs on CoreOS version 494.5.0 or later in the Stable channel.
 
 
 Check System Requirements
@@ -60,6 +60,8 @@ Update $private_ipv4
 the user-data with the (private) IP address of the node.
 
 
+.. include:: ../_includes/_private-network.rst
+
 Add Environment
 ^^^^^^^^^^^^^^^
 
@@ -78,7 +80,7 @@ get written on boot. Add it to the `write_files` section of the user-data file:
 Install CoreOS to disk
 ----------------------
 
-Assuming you have booted your bare metal server into `CoreOS`_, you can perform now perform the
+Assuming you have booted your bare metal server into `CoreOS`_, you can now perform the
 installation to disk.
 
 Provide the config file to the installer
@@ -93,11 +95,12 @@ Start the installation
 
 .. code-block:: console
 
-    coreos-install -C alpha -c /tmp/config -d /dev/sda
+    coreos-install -C stable -c /tmp/config -d /dev/sda
 
 
-This will install the latest `CoreOS`_ alpha release to disk. To specify a specific CoreOS version,
-append the ``-V`` parameter to the install command, e.g. ``-V 494.0.0``.
+This will install the latest `CoreOS`_ stable release to disk. The Deis provision scripts for other
+platforms typically specify a CoreOS version - currently, ``494.5.0``. To specify a CoreOS
+version, append the ``-V`` parameter to the install command, e.g. ``-V 494.5.0``.
 
 After the installation has finished, reboot your server. Once your machine is back up, you should
 be able to log in as the `core` user using the `deis` ssh key.

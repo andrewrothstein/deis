@@ -6,7 +6,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -47,11 +46,11 @@ func ListUnitFiles(argv []string, b backend.Backend) error {
 }
 
 // Scale grows or shrinks the number of running components.
-// Currently "router" is the only type that can be scaled.
+// Currently "router" and "registry" are the only types that can be scaled.
 func Scale(argv []string, b backend.Backend) error {
 	usage := `Grows or shrinks the number of running components.
 
-Currently "router" is the only type that can be scaled.
+Currently "router" and "registry" are the only types that can be scaled.
 
 Usage:
   deisctl scale [<target>...] [options]
@@ -75,7 +74,7 @@ Usage:
 			return err
 		}
 		// the router is the only component that can scale at the moment
-		if !strings.Contains(component, "router") {
+		if !strings.Contains(component, "router") && !strings.Contains(component, "registry") {
 			return fmt.Errorf("cannot scale %s components", component)
 		}
 		b.Scale(component, num, &wg, outchan, errchan)
@@ -185,13 +184,16 @@ func startDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	wg.Wait()
 
 	// optimization: start all remaining services in the background
+	// cache is a special case because it must start before registry
+	b.Start([]string{"cache"}, &_wg, _outchan, _errchan)
+	wg.Wait()
 	b.Start([]string{
-		"cache", "database", "registry", "controller", "builder",
+		"database", "registry@1", "controller", "builder",
 		"publisher", "router@1", "router@2", "router@3"},
 		&_wg, _outchan, _errchan)
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Start([]string{"cache", "database", "registry", "controller"}, wg, outchan, errchan)
+	b.Start([]string{"cache", "database", "registry@1", "controller"}, wg, outchan, errchan)
 	wg.Wait()
 	b.Start([]string{"builder"}, wg, outchan, errchan)
 	wg.Wait()
@@ -270,7 +272,9 @@ func stopDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan str
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Stop([]string{"controller", "builder", "cache", "database", "registry"}, wg, outchan, errchan)
+	b.Stop([]string{"controller", "builder", "database", "registry@1"}, wg, outchan, errchan)
+	wg.Wait()
+	b.Stop([]string{"cache"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Logging subsystem...")
@@ -432,7 +436,7 @@ func installDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan 
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Create([]string{"cache", "database", "registry", "controller", "builder"}, wg, outchan, errchan)
+	b.Create([]string{"cache", "database", "registry@1", "controller", "builder"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Data plane...")
@@ -512,7 +516,7 @@ func uninstallAllServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Destroy([]string{"controller", "builder", "cache", "database", "registry"}, wg, outchan, errchan)
+	b.Destroy([]string{"controller", "builder", "cache", "database", "registry@1"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Logging subsystem...")
@@ -579,12 +583,17 @@ A configuration value is stored and retrieved from a key/value store
 values are typically used for component-level configuration, such as
 enabling TLS for the routers.
 
-Usage:
-  deisctl config <target> get [<key>...] [options]
-  deisctl config <target> set <key=val>... [options]
+Note: "deisctl config platform set sshPrivateKey=" expects a path
+to a private key.
 
-Options:
-  --verbose		print out the request bodies [default: false]
+Usage:
+  deisctl config <target> get [<key>...]
+  deisctl config <target> set <key=val>...
+
+Examples:
+  deisctl config platform set domain=mydomain.com
+  deisctl config platform set sshPrivateKey=$HOME/.ssh/deis
+  deisctl config controller get webEnabled
 `
 	// parse command-line arguments
 	args, err := docopt.Parse(usage, argv, true, "", false)
@@ -626,9 +635,7 @@ Options:
 		os.Exit(2)
 	}
 	dir := args["--path"].(string)
-	if dir == "$HOME/.deis/units" || dir == "~/.deis/units" {
-		dir = path.Join(os.Getenv("HOME"), ".deis", "units")
-	}
+	dir = utils.ResolvePath(dir)
 	// create the target dir if necessary
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err

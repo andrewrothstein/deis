@@ -68,16 +68,14 @@ a private registry.
 
 Because you are deploying a Docker image, the ``cmd`` process type is automatically scaled to 1 on first deploy.
 
+Use ``deis scale cmd=3`` to increase ``cmd`` processes to 3, for example. Scaling a
+process type directly changes the number of :ref:`Containers <container>`
+running that process.
+
+
 .. attention::
 
     Support for Docker registry authentication is coming soon
-
-Define Process Types
---------------------
-Docker containers have a default command usually specified by a `CMD instruction`_.
-Deis uses the ``cmd`` process type to refer to this default command.
-
-Process types other than ``cmd`` are not supported when using Docker images.
 
 
 .. _`Docker Image`: https://docs.docker.com/introduction/understanding-docker/

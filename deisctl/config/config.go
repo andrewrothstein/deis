@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"strings"
+
+	"github.com/deis/deis/deisctl/utils"
 )
 
 // Config runs the config subcommand
 func Config(args map[string]interface{}) error {
-	err := setConfigFlags(args)
-	if err != nil {
-		return err
-	}
 	return doConfig(args)
 }
 
@@ -30,14 +28,6 @@ func CheckConfig(root string, k string) error {
 		return err
 	}
 
-	return nil
-}
-
-// Flags for config package
-var Flags struct {
-}
-
-func setConfigFlags(args map[string]interface{}) error {
 	return nil
 }
 
@@ -84,7 +74,7 @@ func doConfigSet(client *etcdClient, root string, kvs []string) ([]string, error
 
 		// special handling for sshKey
 		if path == "/deis/platform/sshPrivateKey" {
-			b64, err := readSSHPrivateKey(v)
+			b64, err := readSSHPrivateKey(utils.ResolvePath(v))
 			if err != nil {
 				return result, err
 			}

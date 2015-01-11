@@ -172,7 +172,6 @@ class BuildTest(TransactionTestCase):
     def test_build_str(self):
         """Test the text representation of a build."""
         url = '/v1/apps'
-        response = self.client.post(url)
         response = self.client.post(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 201)
         app_id = response.data['id']
@@ -207,3 +206,24 @@ class BuildTest(TransactionTestCase):
         build = Build.objects.get(uuid=response.data['uuid'])
         self.assertEqual(str(build), "{}-{}".format(
                          response.data['app'], response.data['uuid'][:7]))
+
+    @mock.patch('requests.post', mock_import_repository_task)
+    def test_unauthorized_user_cannot_modify_build(self):
+        """
+        An unauthorized user should not be able to modify other builds.
+
+        Since an unauthorized user can't access the application, these
+        requests should return a 403.
+        """
+        app_id = 'autotest'
+        url = '/v1/apps'
+        body = {'id': app_id}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        unauthorized_user = User.objects.get(username='autotest2')
+        unauthorized_token = Token.objects.get(user=unauthorized_user).key
+        url = '{}/{}/builds'.format(url, app_id)
+        body = {'image': 'foo'}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(unauthorized_token))
+        self.assertEqual(response.status_code, 403)

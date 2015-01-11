@@ -17,6 +17,11 @@
       "Description": "Number of nodes in cluster (3-12).",
       "Type": "Number"
     },
+    "IamInstanceProfile" : {
+      "Description" : "(Optional) Set IAM instance profile for Deis hosts (default: none)",
+      "Type" : "String",
+      "Default": ""
+    },
     "SSHFrom" : {
       "Description" : "Lockdown SSH access to the Deis hosts (default: can be accessed from anywhere)",
       "Type" : "String",
@@ -84,15 +89,15 @@
 
   "Mappings" : {
     "CoreOSAMIs" : {
-      "eu-central-1"   : { "PV" : "ami-0cae9811", "HVM" : "ami-12ae980f" },
-      "ap-northeast-1" : { "PV" : "ami-9f60599e", "HVM" : "ami-9d60599c" },
-      "sa-east-1"      : { "PV" : "ami-21ca7c3c", "HVM" : "ami-23ca7c3e" },
-      "ap-southeast-2" : { "PV" : "ami-adb9d697", "HVM" : "ami-afb9d695" },
-      "ap-southeast-1" : { "PV" : "ami-0eebc85c", "HVM" : "ami-0cebc85e" },
-      "us-east-1"      : { "PV" : "ami-30058d58", "HVM" : "ami-3e058d56" },
-      "us-west-2"      : { "PV" : "ami-b34f0483", "HVM" : "ami-b14f0481" },
-      "us-west-1"      : { "PV" : "ami-ff7264ba", "HVM" : "ami-f97264bc" },
-      "eu-west-1"      : { "PV" : "ami-1e47f269", "HVM" : "ami-1c47f26b" }
+      "eu-central-1"   : { "PV" : "ami-4e7d4d53", "HVM" : "ami-487d4d55" },
+      "ap-northeast-1" : { "PV" : "ami-dccfc0dd", "HVM" : "ami-decfc0df" },
+      "sa-east-1"      : { "PV" : "ami-c904b4d4", "HVM" : "ami-cb04b4d6" },
+      "ap-southeast-2" : { "PV" : "ami-d7e981ed", "HVM" : "ami-d1e981eb" },
+      "ap-southeast-1" : { "PV" : "ami-81406fd3", "HVM" : "ami-83406fd1" },
+      "us-east-1"      : { "PV" : "ami-7e5d3d16", "HVM" : "ami-705d3d18" },
+      "us-west-2"      : { "PV" : "ami-4fd4857f", "HVM" : "ami-4dd4857d" },
+      "us-west-1"      : { "PV" : "ami-15fae850", "HVM" : "ami-17fae852" },
+      "eu-west-1"      : { "PV" : "ami-7a3a840d", "HVM" : "ami-783a840f" }
 
     },
     "RootDevices" : {
@@ -103,6 +108,17 @@
       "VPC"     : { "CIDR" : "10.21.0.0/16" },
       "Subnet1" : { "CIDR" : "10.21.1.0/24" },
       "Subnet2" : { "CIDR" : "10.21.2.0/24" }
+    }
+  },
+
+  "Conditions" : {
+    "UseIamInstanceProfile" : {
+      "Fn::Not" : [{
+        "Fn::Equals" : [
+          { "Ref" : "IamInstanceProfile" },
+           ""
+        ]
+      }]
     }
   },
 
@@ -221,6 +237,13 @@
       "Properties": {
         "ImageId" : { "Fn::FindInMap" : [ "CoreOSAMIs", { "Ref" : "AWS::Region" }, { "Ref" : "EC2VirtualizationType" }]},
         "InstanceType": {"Ref": "InstanceType"},
+        "IamInstanceProfile" : {
+          "Fn::If" : [
+            "UseIamInstanceProfile",
+            { "Ref" : "IamInstanceProfile" },
+            { "Ref" : "AWS::NoValue" }
+          ]
+        },
         "KeyName": {"Ref": "KeyPair"},
         "UserData" : { "Fn::Base64": { "Fn::Join": [ "", [ ] ] } },
         "AssociatePublicIpAddress": {"Ref": "AssociatePublicIP"},
@@ -228,6 +251,10 @@
         "BlockDeviceMappings" : [
           {
             "DeviceName" : { "Fn::FindInMap": [ "RootDevices", { "Ref": "EC2VirtualizationType" }, "Name" ] },
+            "Ebs" : { "VolumeSize" : "50" }
+          },
+          {
+            "DeviceName" : "/dev/xvdf",
             "Ebs" : { "VolumeSize" : "100" }
           }
         ]
@@ -266,7 +293,10 @@
           {
             "Fn::GetAtt": ["DeisWebELBSecurityGroup", "GroupId"]
           }
-        ]
+        ],
+        "ConnectionSettings": {
+          "IdleTimeout": 1200
+        }
       }
     },
     "DeisWebELBSecurityGroup": {

@@ -4,3 +4,6 @@ CMD ["/bin/logger"]
 EXPOSE 514
 
 ADD . /
+
+ENV DEIS_RELEASE 1.3.0-dev
+

@@ -1,3 +1,5 @@
+// +build !windows
+
 package main
 
 import (
@@ -9,13 +11,9 @@ import (
 	"github.com/deis/deis/deisctl/backend/fleet"
 	"github.com/deis/deis/deisctl/client"
 	"github.com/deis/deis/deisctl/utils"
+	"github.com/deis/deis/version"
 
 	docopt "github.com/docopt/docopt-go"
-)
-
-const (
-	// Version of deisctl client
-	Version string = "1.0.1+git"
 )
 
 // main exits with the return value of Command(os.Args[1:]), deferring all logic to
@@ -28,7 +26,7 @@ func main() {
 func Command(argv []string) int {
 	deisctlMotd := utils.DeisIfy("Deis Control Utility")
 	usage := deisctlMotd + `
-Usage: deisctl <command> [<args>...] [options]
+Usage: deisctl [options] <command> [<args>...]
 
 Commands, use "deisctl help <command>" to learn more:
   install           install components, or the entire platform
@@ -37,7 +35,7 @@ Commands, use "deisctl help <command>" to learn more:
   start             start compnents
   stop              stop components
   restart           stop, then start components
-  scale             grow or shrink the number of routers
+  scale             grow or shrink the number of routers or registries
   journal           print the log output of a component
   config            set platform or component values
   refresh-units     refresh unit files from GitHub
@@ -52,6 +50,7 @@ Options:
   --etcd-keyfile=<path>       etcd key file authentication [default: ]
   --known-hosts-file=<path>   where to store remote fingerprints [default: ~/.ssh/known_hosts]
   --request-timeout=<secs>    seconds before a request is considered failed [default: 10.0]
+  --ssh-timeout=<secs>        seconds before SSH connection is considered failed [default: 10.0]
   --strict-host-key-checking  verify SSH host keys [default: true]
   --tunnel=<host>             SSH tunnel for communication with fleet and etcd [default: ]
   --version                   print the version of deisctl
@@ -59,14 +58,13 @@ Options:
 	// pre-parse command-line arguments
 	argv, helpFlag := parseArgs(argv)
 	// give docopt an optional final false arg so it doesn't call os.Exit()
-	args, err := docopt.Parse(usage, argv, false, Version, false, false)
+	args, err := docopt.Parse(usage, argv, false, version.Version, true, false)
 	if err != nil || len(args) == 0 {
 		if helpFlag {
 			fmt.Print(usage)
 			return 0
-		} else {
-			return 1
 		}
+		return 1
 	}
 	command := args["<command>"]
 	setTunnel := true
@@ -134,9 +132,10 @@ func isGlobalArg(arg string) bool {
 		"--etcd-cafile=",
 		// "--experimental-api=",
 		"--known-hosts-file=",
-		"--strict-host-key-checking=",
 		"--request-timeout=",
-		"--tunnel",
+		"--ssh-timeout=",
+		"--strict-host-key-checking=",
+		"--tunnel=",
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(arg, p) {
@@ -181,7 +180,7 @@ func parseArgs(argv []string) ([]string, bool) {
 // removeGlobalArgs returns the given args without any global option flags, to make
 // re-parsing by subcommands easier.
 func removeGlobalArgs(argv []string) []string {
-	v := make([]string, 0)
+	var v []string
 	for _, a := range argv {
 		if !isGlobalArg(a) {
 			v = append(v, a)
@@ -202,6 +201,8 @@ func setGlobalFlags(args map[string]interface{}, setTunnel bool) {
 	fleet.Flags.StrictHostKeyChecking = args["--strict-host-key-checking"].(bool)
 	timeout, _ := strconv.ParseFloat(args["--request-timeout"].(string), 64)
 	fleet.Flags.RequestTimeout = timeout
+	sshTimeout, _ := strconv.ParseFloat(args["--ssh-timeout"].(string), 64)
+	fleet.Flags.SSHTimeout = sshTimeout
 	if setTunnel == true {
 		tunnel := args["--tunnel"].(string)
 		if tunnel != "" {

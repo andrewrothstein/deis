@@ -20,9 +20,9 @@ MANAGERS = ADMINS
 
 CONN_MAX_AGE = 60 * 3
 
-# Hosts/domain names that are valid for this site; required if DEBUG is False
-# See https://docs.djangoproject.com/en/1.5/ref/settings/#allowed-hosts
-ALLOWED_HOSTS = ['localhost']
+# SECURITY: change this to allowed fqdn's to prevent host poisioning attacks
+# https://docs.djangoproject.com/en/1.6/ref/settings/#allowed-hosts
+ALLOWED_HOSTS = ['*']
 
 # Local time zone for this installation. Choices can be found here:
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
@@ -107,7 +107,8 @@ MIDDLEWARE_CLASSES = (
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    'api.middleware.VersionMiddleware',
+    'api.middleware.APIVersionMiddleware',
+    'deis.middleware.PlatformVersionMiddleware',
     # Uncomment the next line for simple clickjacking protection:
     # 'django.middleware.clickjacking.XFrameOptionsMiddleware',
 )
@@ -154,10 +155,6 @@ AUTHENTICATION_BACKENDS = (
 )
 
 ANONYMOUS_USER_ID = -1
-ACCOUNT_EMAIL_REQUIRED = True
-ACCOUNT_EMAIL_VERIFICATION = 'none'
-ACCOUNT_LOGOUT_ON_GET = True
-ACCOUNT_USERNAME_BLACKLIST = ['system']
 LOGIN_URL = '/v1/auth/login/'
 LOGIN_REDIRECT_URL = '/'
 
@@ -269,7 +266,6 @@ ETCD_HOST, ETCD_PORT = os.environ.get('ETCD', '127.0.0.1:4001').split(',')[0].sp
 DEIS_LOG_DIR = os.path.abspath(os.path.join(__file__, '..', '..', 'logs'))
 LOG_LINES = 1000
 TEMPDIR = tempfile.mkdtemp(prefix='deis')
-DEFAULT_BUILD = 'deis/helloworld'
 DEIS_DOMAIN = 'deisapp.local'
 
 # standard datetime format used for logging, model timestamps, etc.
@@ -308,13 +304,16 @@ DATABASES = {
 
 APP_URL_REGEX = '[a-z0-9-]+'
 
-# SECURITY: change this to allowed fqdn's to prevent host poisioning attacks
-# see https://docs.djangoproject.com/en/1.5/ref/settings/#std:setting-ALLOWED_HOSTS
-ALLOWED_HOSTS = ['*']
-
 # Honor HTTPS from a trusted proxy
 # see https://docs.djangoproject.com/en/1.6/ref/settings/#secure-proxy-ssl-header
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Unit Hostname handling.
+# Supports:
+#  default      - Docker generated hostname
+#  application  - Hostname based on application unit name (i.e. my-application.v2.web.1)
+#  server       - Hostname based on CoreOS server hostname
+UNIT_HOSTNAME = 'default'
 
 # Create a file named "local_settings.py" to contain sensitive settings data
 # such as database configuration, admin email, or passwords and keys. It

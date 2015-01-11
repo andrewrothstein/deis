@@ -113,15 +113,9 @@ Use ``git push deis master`` to deploy your application.
 
 Because a Dockerfile application is detected, the ``cmd`` process type is automatically scaled to 1 on first deploy.
 
-Define Process Types
---------------------
-Docker containers have a default command usually specified by a `CMD instruction`_.
-Deis uses the ``cmd`` process type to refer to this default command.
-
-Deis also supports scaling other process types as defined in a `Procfile`_.  To use this functionality, you must:
-
-1. Define process types with a `Procfile`_ in the root of your repository
-2. Include a ``start`` executable that can be called with: ``start <process-type>``
+Use ``deis scale cmd=3`` to increase ``cmd`` processes to 3, for example. Scaling a
+process type directly changes the number of :ref:`Containers <container>`
+running that process.
 
 
 .. _`Dockerfile`: https://docs.docker.com/reference/builder/

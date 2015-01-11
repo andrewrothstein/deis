@@ -55,7 +55,7 @@ that, create at least three Droplets with the following specifications:
  - All Droplets deployed in the same region
  - Region must have private networking enabled
  - Region must have User Data enabled. Supply the user-data file here
- - Select CoreOS Alpha channel
+ - Select CoreOS Stable channel
  - Select your SSH key from the list
 
 If private networking is not available in your region, swap out ``$private_ipv4`` with
@@ -78,7 +78,7 @@ If you want to use the script:
     London 1 (lon1)
     New York 3 (nyc3)
     Singapore 1 (sgp1)
-    $ ./contrib/digitalocean/provision-do-cluster nyc3 12345 4GB
+    $ ./contrib/digitalocean/provision-do-cluster.sh nyc3 12345 4GB
 
 Which will provision 3 CoreOS nodes for use.
 

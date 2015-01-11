@@ -187,6 +187,7 @@ class ConfigTest(TransactionTestCase):
                                     HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 201)
         self.assertIn('PORT', response.data['values'])
+        return response
 
     @mock.patch('requests.post', mock_import_repository_task)
     def test_limit_memory(self):
@@ -423,3 +424,31 @@ class ConfigTest(TransactionTestCase):
         self.assertEqual(response.status_code, 405)
         response = self.client.delete(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 405)
+
+    def test_config_owner_is_requesting_user(self):
+        """
+        Ensure that setting the config value is owned by the requesting user
+        See https://github.com/deis/deis/issues/2650
+        """
+        response = self.test_admin_can_create_config_on_other_apps()
+        self.assertEqual(response.data['owner'], self.user.username)
+
+    def test_unauthorized_user_cannot_modify_config(self):
+        """
+        An unauthorized user should not be able to modify other config.
+
+        Since an unauthorized user can't access the application, these
+        requests should return a 403.
+        """
+        app_id = 'autotest'
+        base_url = '/v1/apps'
+        body = {'id': app_id}
+        response = self.client.post(base_url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        unauthorized_user = User.objects.get(username='autotest2')
+        unauthorized_token = Token.objects.get(user=unauthorized_user).key
+        url = '{}/{}/config'.format(base_url, app_id)
+        body = {'values': {'FOO': 'bar'}}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(unauthorized_token))
+        self.assertEqual(response.status_code, 403)

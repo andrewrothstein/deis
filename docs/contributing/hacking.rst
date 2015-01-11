@@ -19,6 +19,25 @@ Prerequisites
 You can develop on any supported platform including your laptop, cloud providers or
 on bare metal.  We strongly recommend a minimum 3-node cluster.
 
+Deis is written in both python and Go, so you will need to install both Python 2.7 and
+the latest version of Go.
+
+If your local workstation does not support the linux/amd64 target environment, you will
+have to install Go from source with cross-compile support for that environment. This is
+because some of the components are built on your local machine and then injected into a
+docker container. To do that, run
+
+.. code-block:: console
+
+    $ sudo su
+    $ curl -sSL https://golang.org/dl/go1.4.src.tar.gz | tar -v -C /usr/local -xz
+    $ cd /usr/local/go/src
+    $ # compile Go for our default platform first, then add cross-compile support
+    $ ./make.bash --no-clean
+    $ GOOS=linux GOARCH=amd64 ./make.bash --no-clean
+
+After that, you should be able to compile Deis' components as normal.
+
 The development workflow requires a Docker Registry that is accessible to you
 (the developer) and to all of the hosts in your cluster.
 
@@ -34,20 +53,19 @@ then clone your fork of the repository:
 
 	$ git clone git@github.com:<username>/deis.git
 	$ cd deis
-	$ export DEIS_DIR=`pwd`  # to use in future commands
 
 Install the Client
 ------------------
 
-In a development environment you'll want to use the latest version of the client. Install
-its dependencies by using the Makefile and symlinking ``client/deis.py`` to ``deis`` on
-your local workstation.
+Your Deis client should match your server's version. For developers, one way
+to ensure this is to use `Python 2.7`_ to install requirements and then run
+``client/deis.py`` in the Deis code repository. Then make a symlink or shell
+alias for ``deis`` to ensure it is found in your ``$PATH``:
 
 .. code-block:: console
 
-    $ cd $DEIS_DIR/client
-    $ make install
-    $ sudo ln -fs $DEIS_DIR/client/deis.py /usr/local/bin/deis
+    $ make -C client/ install
+    $ sudo ln -fs $(pwd)/client/deis.py /usr/local/bin/deis
     $ deis
     Usage: deis <command> [<args>...]
 
@@ -74,12 +92,24 @@ Test connectivity using ``deisctl list``:
 
     $ deisctl list
 
+Start Up a Development Cluster
+------------------------------
+
+To start up and configure a local vagrant cluster for development, you can use the ``dev-cluster`` target.
+This requires that ``deisctl`` and ``vagrant`` are installed.
+
+.. code-block:: console
+
+    $ make dev-cluster
+
 Configure a Docker Registry
 ---------------------------
 
 The development workflow requires Docker Registry set at the ``DEV_REGISTRY``
 environment variable.  If you're developing locally you can use the ``dev-registry``
 target to spin up a quick, disposable registry inside a Docker container.
+The target ``dev-registry`` prints the registry's address and port when using ``boot2docker``;
+otherwise, use your host's IP address as returned by ``ifconfig`` with port 5000 for ``DEV_REGISTRY``.
 
 .. code-block:: console
 
@@ -102,6 +132,12 @@ Make sure it meets the following requirements:
 
  #. You can push Docker images from your workstation
  #. Hosts in the cluster can pull images with the same URL
+
+.. note::
+
+    If the development registry is insecure and has an IP address in a range other than ``10.0.0.0/8``,
+    ``172.16.0.0/12``, or ``192.168.0.0/16``, you'll have to modify ``contrib/coreos/user-data.example``
+    and whitelist your development registry so the daemons can pull your custom components.
 
 Development Workflow
 --------------------
@@ -182,5 +218,6 @@ when proposing a change to Deis.
 .. _`easy-fix`: https://github.com/deis/deis/issues?labels=easy-fix&state=open
 .. _`deisctl`: https://github.com/deis/deis/tree/master/deisctl
 .. _`fork the Deis repository`: https://github.com/deis/deis/fork
+.. _`Python 2.7`: https://www.python.org/downloads/release/python-279/
 .. _`running the tests`: https://github.com/deis/deis/tree/master/tests#readme
 .. _`pull request`: https://github.com/deis/deis/pulls

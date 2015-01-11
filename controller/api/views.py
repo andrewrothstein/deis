@@ -8,7 +8,6 @@ from __future__ import unicode_literals
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser, User
 from django.core.exceptions import ValidationError
-from django.http import Http404
 from django.utils import timezone
 from guardian.shortcuts import assign_perm
 from guardian.shortcuts import get_objects_for_user
@@ -128,7 +127,7 @@ class AppPermsViewSet(viewsets.ViewSet):
             models.log_event(app, "User {} was revoked access to {}".format(user, app))
             return Response(status=status.HTTP_204_NO_CONTENT)
         else:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+            return Response(status=status.HTTP_403_FORBIDDEN)
 
 
 class AdminPermsViewSet(viewsets.ModelViewSet):
@@ -139,6 +138,7 @@ class AdminPermsViewSet(viewsets.ModelViewSet):
     permission_classes = (IsAdmin,)
 
     def get_queryset(self, **kwargs):
+        self.check_object_permissions(self.request, self.request.user)
         return self.model.objects.filter(is_active=True, is_superuser=True)
 
     def create(self, request, **kwargs):
@@ -216,7 +216,7 @@ class AppViewSet(OwnerViewSet):
                         content_type='text/plain')
 
     def destroy(self, request, **kwargs):
-        obj = get_object_or_404(self.model, id=kwargs['id'])
+        obj = self.get_object()
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -230,11 +230,7 @@ class BaseAppViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self, **kwargs):
         app = get_object_or_404(models.App, id=self.kwargs['id'])
-        try:
-            self.check_object_permissions(self.request, app)
-        except PermissionDenied:
-            raise Http404("No {} matches the given query.".format(
-                self.model._meta.object_name))
+        self.check_object_permissions(self.request, app)
         return self.model.objects.filter(app=app)
 
     def get_object(self, *args, **kwargs):
@@ -260,6 +256,7 @@ class AppBuildViewSet(BaseAppViewSet):
 
     def create(self, request, *args, **kwargs):
         app = get_object_or_404(models.App, id=self.kwargs['id'])
+        self.check_object_permissions(self.request, app)
         request._data = request.DATA.copy()
         request.DATA['app'] = app
         try:
@@ -277,19 +274,14 @@ class AppConfigViewSet(BaseAppViewSet):
     def get_object(self, *args, **kwargs):
         """Return the Config associated with the App's latest Release."""
         app = get_object_or_404(models.App, id=self.kwargs['id'])
-        try:
-            self.check_object_permissions(self.request, app)
-            return app.release_set.latest().config
-        except (PermissionDenied, models.Release.DoesNotExist):
-            raise Http404("No {} matches the given query.".format(
-                self.model._meta.object_name))
+        self.check_object_permissions(self.request, app)
+        return app.release_set.latest().config
 
     def pre_save(self, config):
         """merge the old config with the new"""
         previous_config = config.app.config_set.latest()
         config.owner = self.request.user
         if previous_config:
-            config.owner = previous_config.owner
             for attr in ['cpu', 'memory', 'tags', 'values']:
                 # Guard against migrations from older apps without fixes to
                 # JSONField encoding.
@@ -347,6 +339,7 @@ class AppReleaseViewSet(BaseAppViewSet):
         """
         try:
             app = get_object_or_404(models.App, id=self.kwargs['id'])
+            self.check_object_permissions(self.request, app)
             release = app.release_set.latest()
             version_to_rollback_to = release.version - 1
             if request.DATA.get('version'):
@@ -398,14 +391,15 @@ class DomainViewSet(OwnerViewSet):
 
     def create(self, request, *args, **kwargs):
         app = get_object_or_404(models.App, id=self.kwargs['id'])
+        self.check_object_permissions(self.request, app)
         request._data = request.DATA.copy()
         request.DATA['app'] = app
         return super(DomainViewSet, self).create(request, *args, **kwargs)
 
     def get_queryset(self, **kwargs):
         app = get_object_or_404(models.App, id=self.kwargs['id'])
-        qs = self.model.objects.filter(app=app)
-        return qs
+        self.check_object_permissions(self.request, app)
+        return self.model.objects.filter(app=app)
 
     def get_object(self, *args, **kwargs):
         qs = self.get_queryset(**kwargs)

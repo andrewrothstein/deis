@@ -48,9 +48,8 @@ $CONTRIB_DIR/util/check-user-data.sh
 
 i=1 ; while [[ $i -le $DEIS_NUM_INSTANCES ]] ; do \
     echo_yellow "Provisioning deis-$i..."
-    # TODO: update to CoreOS 494.0.0 when it is available at Rackspace
-    # This image is CoreOS 490.0.0
-    supernova $ENV boot --image 3c7e97fa-a9f5-4b09-97aa-c94e66dbbfeb --flavor $FLAVOR --key-name $1 --user-data ../coreos/user-data --no-service-net --nic net-id=$NETWORK_ID --config-drive true deis-$i ; \
+    # This image is CoreOS 494.5.0 in the stable channel
+    supernova $ENV boot --image 6ad64ee8-6726-4077-b051-dbaed2d47e88 --flavor $FLAVOR --key-name $1 --user-data $CONTRIB_DIR/coreos/user-data --no-service-net --nic net-id=$NETWORK_ID --config-drive true deis-$i ; \
     ((i = i + 1)) ; \
 done
 

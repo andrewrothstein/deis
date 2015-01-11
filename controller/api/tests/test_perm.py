@@ -159,10 +159,13 @@ class TestAppPerms(TestCase):
         self.assertEqual(len(response.data['results']), 1)
         # check that user 2 can't see any of the app's builds, configs,
         # containers, limits, or releases
-        for model in ['builds', 'config', 'containers', 'limits', 'releases']:
+        for model in ['builds', 'config', 'containers', 'releases']:
             response = self.client.get("/v1/apps/{}/{}/".format(app_id, model),
                                        HTTP_AUTHORIZATION='token {}'.format(self.token2))
-            self.assertEqual(response.data['detail'], 'Not found')
+            msg = "Failed: status '%s', and data '%s'" % (response.status_code, response.data)
+            self.assertEqual(response.status_code, 403, msg=msg)
+            self.assertEqual(response.data['detail'],
+                             'You do not have permission to perform this action.', msg=msg)
         # TODO: test that git pushing to the app fails
         # give user 2 permission to user 1's app
         url = "/v1/apps/{}/perms".format(app_id)
@@ -224,7 +227,7 @@ class TestAppPerms(TestCase):
         # delete permission to user 1's app again, expecting an error
         response = self.client.delete(url, content_type='application/json',
                                       HTTP_AUTHORIZATION='token {}'.format(self.token))
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
 
     def test_list(self):
         # check that user 1 sees her lone app and user 2's app
@@ -257,4 +260,24 @@ class TestAppPerms(TestCase):
         response = self.client.get(
             "/v1/apps/{}/perms".format(app_id), content_type='application/json',
             HTTP_AUTHORIZATION='token {}'.format(self.token2))
+        self.assertEqual(response.status_code, 403)
+
+    def test_unauthorized_user_cannot_modify_perms(self):
+        """
+        An unauthorized user should not be able to modify other apps' permissions.
+
+        Since an unauthorized user should not know about the application at all, these
+        requests should return a 404.
+        """
+        app_id = 'autotest'
+        url = '/v1/apps'
+        body = {'id': app_id}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        unauthorized_user = self.user2
+        unauthorized_token = self.token2
+        url = '{}/{}/perms'.format(url, app_id)
+        body = {'username': unauthorized_user.username}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(unauthorized_token))
         self.assertEqual(response.status_code, 403)

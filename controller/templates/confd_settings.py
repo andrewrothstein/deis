@@ -34,9 +34,6 @@ DATABASES = {
     }
 }
 
-# configure cache
-CACHE_URL = 'redis://{{ .deis_cache_host }}:{{ .deis_cache_port }}/0'
-
 # move log directory out of /app/deis
 DEIS_LOG_DIR = '/data/logs'
 
@@ -47,3 +44,5 @@ REGISTRATION_ENABLED = bool({{ .deis_controller_registrationEnabled }})
 {{ if .deis_controller_webEnabled }}
 WEB_ENABLED = bool({{ .deis_controller_webEnabled }})
 {{ end }}
+
+UNIT_HOSTNAME = '{{ or (.deis_controller_unitHostname) "default" }}'

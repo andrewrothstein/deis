@@ -94,6 +94,10 @@ Use ``git push deis master`` to deploy your application.
 
 Because a Heroku-style application is detected, the ``web`` process type is automatically scaled to 1 on first deploy.
 
+Use ``deis scale web=3`` to increase ``web`` processes to 3, for example. Scaling a
+process type directly changes the number of :ref:`Containers <container>`
+running that process.
+
 Included Buildpacks
 -------------------
 For convenience, a number of buildpacks come bundled with Deis:
@@ -113,6 +117,11 @@ For convenience, a number of buildpacks come bundled with Deis:
 
 Deis will cycle through the ``bin/detect`` script of each buildpack to match the code you
 are pushing.
+
+.. note::
+
+    If you're testing against the `Scala Buildpack`_, the :ref:`Builder` requires at least
+    512MB of free memory to execute the Scala Build Tool.
 
 Using a Custom Buildpack
 ------------------------
