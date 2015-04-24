@@ -14,6 +14,7 @@ import (
 func TestDatabase(t *testing.T) {
 	var err error
 	tag, etcdPort := utils.BuildTag(), utils.RandomPort()
+	imageName := utils.ImagePrefix() + "database" + ":" + tag
 	cli, stdout, stdoutPipe := dockercli.NewClient()
 
 	// start etcd container
@@ -24,14 +25,11 @@ func TestDatabase(t *testing.T) {
 	// run mock ceph containers
 	cephName := "deis-ceph-" + tag
 	mock.RunMockCeph(t, cephName, cli, etcdPort)
-	defer cli.CmdRm("-f", "-v", cephName+"-monitor")
-	defer cli.CmdRm("-f", "-v", cephName+"-daemon")
-	defer cli.CmdRm("-f", cephName+"-metadata")
-	defer cli.CmdRm("-f", cephName+"-gateway")
+	defer cli.CmdRm("-f", cephName)
 
 	// run database container
 	host, port := utils.HostAddress(), utils.RandomPort()
-	fmt.Printf("--- Run deis/database:%s at %s:%s\n", tag, host, port)
+	fmt.Printf("--- Run %s at %s:%s\n", imageName, host, port)
 	name := "deis-database-" + tag
 	defer cli.CmdRm("-f", name)
 	go func() {
@@ -43,7 +41,7 @@ func TestDatabase(t *testing.T) {
 			"-e", "EXTERNAL_PORT="+port,
 			"-e", "HOST="+host,
 			"-e", "ETCD_PORT="+etcdPort,
-			"deis/database:"+tag)
+			imageName)
 	}()
 	dockercli.PrintToStdout(t, stdout, stdoutPipe, "database: postgres is running...")
 	if err != nil {

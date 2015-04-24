@@ -1,4 +1,4 @@
-FROM golang:1.3
+FROM golang:1.4
 
 ADD firewall /tmp/firewall
 
@@ -14,6 +14,6 @@ RUN go get github.com/tools/godep
 
 ADD . /go/src/github.com/deis/deis/router/
 
-RUN CGO_ENABLED=0 godep go build -a -ldflags '-s' boot.go
+RUN CGO_ENABLED=0 godep go build -a -installsuffix cgo -ldflags '-s' boot.go
 
 RUN cp /go/src/github.com/deis/deis/router/boot /go/bin/boot

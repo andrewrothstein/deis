@@ -32,7 +32,7 @@ run: install start
 dev-release: push set-image
 
 push: check-registry
-	docker tag $(IMAGE) $(DEV_IMAGE)
+	docker tag -f $(IMAGE) $(DEV_IMAGE)
 	docker push $(DEV_IMAGE)
 
 set-image: check-deisctl
@@ -43,11 +43,15 @@ release:
 
 deploy: build dev-release restart
 
-test: test-unit test-functional
+test: test-style test-unit test-functional
 
 test-unit:
 	@echo no unit tests
 
+test-style:
+	@echo no style tests
+
 test-functional:
+	@docker history deis/mock-store >/dev/null 2>&1 || $(MAKE) -C ../tests/ mock-store
 	@docker history deis/test-etcd >/dev/null 2>&1 || docker pull deis/test-etcd:latest
 	GOPATH=`cd ../tests/ && godep path`:$(GOPATH) go test -v ./tests/...

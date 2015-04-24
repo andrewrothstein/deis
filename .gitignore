@@ -31,8 +31,10 @@ builder/image/bin/get-app-config
 builder/image/bin/get-app-values
 builder/image/bin/publish-release-controller
 builder/image/bin/yaml2json-procfile
+cache/image/bin
 client/dist/
 client/makeself/
+contrib/azure/azure-user-data
 contrib/bumpver/bumpver
 deisctl/deisctl
 deisctl/dist/
@@ -40,10 +42,13 @@ deisctl/package/
 deisctl/makeself/
 docs/_build/
 docs/docs.zip
+docs/dummy.sqlite3
+logger/image/bin/logger
 logspout/build/
 logspout/image/logspout
 logspout/Godeps/
 publisher/Godeps/
+publisher/image/bin/publisher
 router/Godeps/
 
 # coverage reports
@@ -53,6 +58,8 @@ htmlcov/
 
 # integration test droppings
 tests/example-*
+tests/*.cert
+tests/*.key
 
 # extra .py droppings from building docs
 /__init__.py

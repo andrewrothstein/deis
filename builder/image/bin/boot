@@ -6,6 +6,10 @@
 # fail hard and fast even on pipelines
 set -eo pipefail
 
+if [[ -f /etc/environment_proxy ]]; then
+	source /etc/environment_proxy
+fi
+
 # set debug based on envvar
 [[ $DEBUG ]] && set -x
 
@@ -14,7 +18,6 @@ export ETCD_PORT=${ETCD_PORT:-4001}
 export ETCD="$HOST:$ETCD_PORT"
 export ETCD_PATH=${ETCD_PATH:-/deis/builder}
 export ETCD_TTL=${ETCD_TTL:-10}
-export STORAGE_DRIVER=${STORAGE_DRIVER:-btrfs}
 
 # wait for etcd to be available
 until etcdctl --no-sync -C $ETCD ls >/dev/null 2>&1; do
@@ -38,20 +41,27 @@ function etcd_safe_mkdir {
 etcd_safe_mkdir $ETCD_PATH/users
 
 # wait for confd to run once and install initial templates
-until confd -onetime -node $ETCD -config-file /app/confd.toml; do
+until confd -onetime -node $ETCD --confdir /app --log-level error; do
 	echo "builder: waiting for confd to write initial templates..."
 	sleep $(($ETCD_TTL/2))  # sleep for half the TTL
 done
 
 # spawn confd in the background to update services based on etcd changes
-confd -node $ETCD -config-file /app/confd.toml &
+confd -node $ETCD --confdir /app --log-level error --interval 5 &
 CONFD_PID=$!
 
 # remove any pre-existing docker.sock
 test -e /var/run/docker.sock && rm -f /var/run/docker.sock
 
+# force overlayfs if the Docker daemon on the host is using it
+mkdir --parents --mode=0700 /
+fstype=$(findmnt --noheadings --output FSTYPE --target /)
+if [[ "$fstype" == "overlay" ]]; then
+	DRIVER_OVERRIDE="--storage-driver=overlay"
+fi
+
 # spawn a docker daemon to run builds
-docker -d --storage-driver=$STORAGE_DRIVER --bip=172.19.42.1/16 --insecure-registry 10.0.0.0/8 --insecure-registry 172.16.0.0/12 --insecure-registry 192.168.0.0/16 &
+docker -d --bip=172.19.42.1/16 $DRIVER_OVERRIDE --insecure-registry 10.0.0.0/8 --insecure-registry 172.16.0.0/12 --insecure-registry 192.168.0.0/16 --insecure-registry 100.64.0.0/10 &
 DOCKER_PID=$!
 
 # wait for docker to start
@@ -63,7 +73,7 @@ done
 # see https://github.com/deis/deis/issues/1027
 if ! docker history progrium/cedarish >/dev/null 2>/dev/null ; then
     echo "Loading cedarish..."
-    gzip -dc /progrium_cedarish.tar.gz | docker load
+    cat /progrium_cedarish.tar.gz | docker import - progrium/cedarish
 else
     echo "Cedarish already loaded"
 fi

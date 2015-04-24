@@ -1,6 +1,7 @@
 :title: Register a new Deis user using the client
 :description: First steps for developers using Deis to deploy and scale applications.
 
+.. _register-user:
 
 Register a User
 ===============
@@ -30,7 +31,9 @@ Note that you always use ``deis.<domain>`` to communicate with the controller.
 
 .. important::
 
-    The first user to register with Deis receives "superuser" privileges.
+    The first user to register with Deis receives "superuser" privileges. Additional users who
+    register will be ordinary users. It's also possible to disable user registration after creating
+    the superuser account. For details, see :ref:`disable_user_registration`.
 
 Upload Your SSH Public Key
 --------------------------

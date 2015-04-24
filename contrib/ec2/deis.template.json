@@ -48,6 +48,11 @@
         "c3.2xlarge",
         "c3.4xlarge",
         "c3.8xlarge",
+        "c4.large",
+        "c4.xlarge",
+        "c4.2xlarge",
+        "c4.4xlarge",
+        "c4.8xlarge",
         "c1.medium",
         "c1.xlarge",
         "cc2.8xlarge",
@@ -78,26 +83,40 @@
       "AllowedValues" : [ "PV", "HVM" ],
       "ConstraintDescription" : "must be either PV or HVM"
     },
+    "EC2EBSVolumeType" : {
+      "Description" : "EC2 EBS VolumeType",
+      "Type": "String",
+      "Default": "gp2",
+      "AllowedValues" : [ "gp2", "standard" ],
+      "ConstraintDescription" : "must be either 'gp2' for SSD or 'standard' for magnetic (provisioned iOPS requires further manual changes)"
+    },
     "AssociatePublicIP": {
       "Description": "Whether to associate a public IP address to the instances",
       "Type": "String",
       "Default": "true",
       "AllowedValues" : [ "true", "false" ],
       "ConstraintDescription" : "must be either true or false"
+    },
+    "ELBScheme": {
+      "Description": "Whether to create an internal-only load balancer, or a public-facing one (default)",
+      "Type": "String",
+      "Default": "internet-facing",
+      "AllowedValues" : [ "internet-facing", "internal" ],
+      "ConstraintDescription" : "must be either 'internet-facing' for public use, or 'internal' for private use"
     }
   },
 
   "Mappings" : {
     "CoreOSAMIs" : {
-      "eu-central-1"   : { "PV" : "ami-4e7d4d53", "HVM" : "ami-487d4d55" },
-      "ap-northeast-1" : { "PV" : "ami-dccfc0dd", "HVM" : "ami-decfc0df" },
-      "sa-east-1"      : { "PV" : "ami-c904b4d4", "HVM" : "ami-cb04b4d6" },
-      "ap-southeast-2" : { "PV" : "ami-d7e981ed", "HVM" : "ami-d1e981eb" },
-      "ap-southeast-1" : { "PV" : "ami-81406fd3", "HVM" : "ami-83406fd1" },
-      "us-east-1"      : { "PV" : "ami-7e5d3d16", "HVM" : "ami-705d3d18" },
-      "us-west-2"      : { "PV" : "ami-4fd4857f", "HVM" : "ami-4dd4857d" },
-      "us-west-1"      : { "PV" : "ami-15fae850", "HVM" : "ami-17fae852" },
-      "eu-west-1"      : { "PV" : "ami-7a3a840d", "HVM" : "ami-783a840f" }
+      "eu-central-1"   : { "PV" : "ami-8c003c91", "HVM" : "ami-92003c8f" },
+      "ap-northeast-1" : { "PV" : "ami-9eb9439e", "HVM" : "ami-9cb9439c" },
+      "sa-east-1"      : { "PV" : "ami-9be66386", "HVM" : "ami-99e66384" },
+      "ap-southeast-2" : { "PV" : "ami-d53845ef", "HVM" : "ami-cb3845f1" },
+      "ap-southeast-1" : { "PV" : "ami-a2cefcf0", "HVM" : "ami-a0cefcf2" },
+      "us-east-1"      : { "PV" : "ami-d6033bbe", "HVM" : "ami-d2033bba" },
+      "us-west-2"      : { "PV" : "ami-39280209", "HVM" : "ami-37280207" },
+      "us-west-1"      : { "PV" : "ami-4df91b09", "HVM" : "ami-43f91b07" },
+      "eu-west-1"      : { "PV" : "ami-2f422358", "HVM" : "ami-21422356" }
 
     },
     "RootDevices" : {
@@ -251,11 +270,11 @@
         "BlockDeviceMappings" : [
           {
             "DeviceName" : { "Fn::FindInMap": [ "RootDevices", { "Ref": "EC2VirtualizationType" }, "Name" ] },
-            "Ebs" : { "VolumeSize" : "50" }
+            "Ebs" : { "VolumeSize" : "50", "VolumeType": { "Ref": "EC2EBSVolumeType" } }
           },
           {
             "DeviceName" : "/dev/xvdf",
-            "Ebs" : { "VolumeSize" : "100" }
+            "Ebs" : { "VolumeSize" : "100", "VolumeType": { "Ref": "EC2EBSVolumeType" } }
           }
         ]
       }
@@ -264,6 +283,7 @@
       "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
       "DependsOn" : "GatewayToInternet",
       "Properties": {
+        "Scheme" : {"Ref": "ELBScheme"},
         "HealthCheck": {
           "HealthyThreshold": "4",
           "Interval": "15",
@@ -281,6 +301,12 @@
             "InstanceProtocol": "HTTP",
             "LoadBalancerPort": "80",
             "Protocol": "HTTP"
+          },
+          {
+            "InstancePort": "443",
+            "InstanceProtocol": "TCP",
+            "LoadBalancerPort": "443",
+            "Protocol": "TCP"
           },
           {
             "InstancePort": "2222",
@@ -305,6 +331,7 @@
         "GroupDescription": "Deis Web ELB SecurityGroup",
         "SecurityGroupIngress": [
           {"IpProtocol": "tcp", "FromPort": "80", "ToPort": "80", "CidrIp": "0.0.0.0/0"},
+          {"IpProtocol": "tcp", "FromPort": "443", "ToPort": "443", "CidrIp": "0.0.0.0/0"},
           {"IpProtocol": "tcp", "FromPort": "2222", "ToPort": "2222", "CidrIp": "0.0.0.0/0"}
         ],
         "VpcId": { "Ref" : "VPC" }
@@ -317,6 +344,7 @@
         "SecurityGroupIngress" : [
           {"IpProtocol": "tcp", "FromPort" : "22",  "ToPort" : "22",  "CidrIp" : { "Ref" : "SSHFrom" }},
           {"IpProtocol": "tcp", "FromPort": "80", "ToPort": "80", "SourceSecurityGroupId": { "Ref": "DeisWebELBSecurityGroup" } },
+          {"IpProtocol": "tcp", "FromPort": "443", "ToPort": "443", "SourceSecurityGroupId": { "Ref": "DeisWebELBSecurityGroup" } },
           {"IpProtocol": "tcp", "FromPort": "2222", "ToPort": "2222", "SourceSecurityGroupId": { "Ref": "DeisWebELBSecurityGroup" } }
         ],
         "VpcId" : { "Ref" : "VPC" }

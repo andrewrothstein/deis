@@ -83,6 +83,11 @@ Install CoreOS to disk
 Assuming you have booted your bare metal server into `CoreOS`_, you can now perform the
 installation to disk.
 
+Review disk usage
+^^^^^^^^^^^^^^^^^
+
+See :ref:`disk_usage` for more information on how to optimize local disks for Deis.
+
 Provide the config file to the installer
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -99,8 +104,8 @@ Start the installation
 
 
 This will install the latest `CoreOS`_ stable release to disk. The Deis provision scripts for other
-platforms typically specify a CoreOS version - currently, ``494.5.0``. To specify a CoreOS
-version, append the ``-V`` parameter to the install command, e.g. ``-V 494.5.0``.
+platforms typically specify a CoreOS version - currently, ``633.1.0``. To specify a CoreOS
+version, append the ``-V`` parameter to the install command, e.g. ``-V 633.1.0``.
 
 After the installation has finished, reboot your server. Once your machine is back up, you should
 be able to log in as the `core` user using the `deis` ssh key.

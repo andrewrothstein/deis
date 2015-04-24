@@ -37,7 +37,9 @@ setting                                      description
 /deis/controller/host                        host of the controller component (set by controller)
 /deis/controller/port                        port of the controller component (set by controller)
 /deis/domains/*                              domain configuration for applications (set by controller)
+/deis/router/affinityArg                     for requests with the indicated query string variable, hash its contents to perform session affinity (default: undefined)
 /deis/router/bodySize                        nginx body size setting (default: 1m)
+/deis/router/defaultTimeout                  default timeout value in seconds. Should be greater then the frontfacing load balancers timeout value (default: 1300)
 /deis/router/builder/timeout/connect         proxy_connect_timeout for deis-builder (default: 10000). Unit in miliseconds
 /deis/router/builder/timeout/read            proxy_read_timeout for deis-builder (default: 1200000). Unit in miliseconds
 /deis/router/builder/timeout/send            proxy_send_timeout for deis-builder (default: 1200000). Unit in miliseconds
@@ -45,6 +47,7 @@ setting                                      description
 /deis/router/controller/timeout/connect      proxy_connect_timeout for deis-controller (default: 10m)
 /deis/router/controller/timeout/read         proxy_read_timeout for deis-controller (default: 20m)
 /deis/router/controller/timeout/send         proxy_send_timeout for deis-controller (default: 20m)
+/deis/router/enforceHTTPS                    redirect all HTTP traffic to HTTPS (default: false)
 /deis/router/firewall/enabled                nginx naxsi firewall enabled (default: false)
 /deis/router/firewall/errorCode              nginx default firewall error code (default: 400)
 /deis/router/gzip                            nginx gzip setting (default: on)
@@ -57,10 +60,12 @@ setting                                      description
 /deis/router/gzipVary                        nginx gzipVary setting (default: on)
 /deis/router/gzipDisable                     nginx gzipDisable setting (default: "msie6")
 /deis/router/gzipTypes                       nginx gzipTypes setting (default: "application/x-javascript application/xhtml+xml application/xml application/xml+rss application/json text/css text/javascript text/plain text/xml")
+/deis/router/maxWorkerConnections            maximum number of simultaneous connections that can be opened by a worker process (default: 768)
 /deis/router/serverNameHashMaxSize           nginx server_names_hash_max_size setting (default: 512)
 /deis/router/serverNameHashBucketSize        nginx server_names_hash_bucket_size (default: 64)
 /deis/router/sslCert                         cluster-wide SSL certificate
 /deis/router/sslKey                          cluster-wide SSL private key
+/deis/router/workerProcesses                 nginx number of worker processes to start (default: auto i.e. available CPU cores)
 /deis/services/*                             healthy application containers reported by deis/publisher
 /deis/store/gateway/host                     host of the store gateway component (set by store-gateway)
 /deis/store/gateway/port                     port of the store gateway component (set by store-gateway)

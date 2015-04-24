@@ -4,6 +4,12 @@
 
 include includes.mk
 
+# the filepath to this repository, relative to $GOPATH/src
+repo_path = github.com/deis/deis
+
+GO_PACKAGES = pkg/time version
+GO_PACKAGES_REPO_PATH = $(addprefix $(repo_path)/,$(GO_PACKAGES))
+
 COMPONENTS=builder cache controller database logger logspout publisher registry router store
 START_ORDER=publisher store logger logspout database cache registry controller builder router
 CLIENTS=client deisctl
@@ -11,7 +17,7 @@ CLIENTS=client deisctl
 all: build run
 
 dev-registry: check-docker
-	@docker inspect registry >/dev/null && docker start registry || docker run -d -p 5000:5000 --name registry registry:0.9.0
+	@docker inspect registry >/dev/null 2>&1 && docker start registry || docker run --restart="always" -d -p 5000:5000 --name registry registry:0.9.1
 	@echo
 	@echo "To use local boot2docker registry for Deis development:"
 	@echo "    export DEV_REGISTRY=`boot2docker ip 2>/dev/null`:5000"
@@ -67,7 +73,7 @@ release: check-registry
 
 deploy: build dev-release restart
 
-test: test-unit test-functional push test-integration
+test: test-style test-unit test-functional push test-integration
 
 test-functional:
 	@$(foreach C, $(COMPONENTS), $(MAKE) -C $(C) test-functional &&) echo done
@@ -81,3 +87,13 @@ test-integration:
 
 test-smoke:
 	$(MAKE) -C tests/ test-smoke
+
+test-style:
+# display output, then check
+	$(GOFMT) $(GO_PACKAGES)
+	@$(GOFMT) $(GO_PACKAGES) | read; if [ $$? == 0 ]; then echo "gofmt check failed."; exit 1; fi
+	$(GOVET) $(GO_PACKAGES_REPO_PATH)
+	@for i in $(addsuffix /...,$(GO_PACKAGES)); do \
+		$(GOLINT) $$i; \
+	done
+	@$(foreach C, tests $(CLIENTS) $(COMPONENTS), $(MAKE) -C $(C) test-style &&) echo done

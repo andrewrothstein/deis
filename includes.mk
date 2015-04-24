@@ -1,3 +1,28 @@
+SHELL = /bin/bash
+
+GO = godep go
+GOFMT = gofmt -l
+GOLINT = golint
+GOTEST = $(GO) test --cover --race -v
+GOVET = $(GO) vet
+
+SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+DOCKER_HOST = $(shell echo $$DOCKER_HOST)
+REGISTRY = $(shell echo $$DEV_REGISTRY)
+GIT_SHA = $(shell git rev-parse --short HEAD)
+
+ifndef IMAGE_PREFIX
+  IMAGE_PREFIX = deis/
+endif
+
+ifndef BUILD_TAG
+  BUILD_TAG = git-$(GIT_SHA)
+endif
+
+ifndef S3_BUCKET
+  S3_BUCKET = deis-updates
+endif
+
 ifndef DEIS_NUM_INSTANCES
   DEIS_NUM_INSTANCES = 3
 endif
@@ -9,18 +34,6 @@ endef
 define echo_yellow
   @echo "\033[0;33m$(subst ",,$(1))\033[0m"
 endef
-
-SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
-DOCKER_HOST = $(shell echo $$DOCKER_HOST)
-REGISTRY = $(shell echo $$DEV_REGISTRY)
-GIT_SHA = $(shell git rev-parse --short HEAD)
-ifndef BUILD_TAG
-  BUILD_TAG = git-$(GIT_SHA)
-endif
-ifndef S3_BUCKET
-  S3_BUCKET = deis-updates
-endif
-IMAGE_PREFIX := deis/
 
 check-docker:
 	@if [ -z $$(which docker) ]; then \
@@ -38,3 +51,13 @@ check-deisctl:
 	@if [ -z $$(which deisctl) ]; then \
 	  echo "Missing \`deisctl\` utility, please install from https://github.com/deis/deis"; \
 	fi
+
+define check-static-binary
+  if file $(1) | grep -q "statically linked"; then \
+    echo -n ""; \
+  else \
+    echo "The binary file $(1) is not statically linked. Build canceled"; \
+    exit 1; \
+  fi
+endef
+

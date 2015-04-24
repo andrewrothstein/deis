@@ -9,9 +9,11 @@ import (
 	"regexp"
 
 	"github.com/deis/deis/logger/syslog"
+
+	"github.com/deis/deis/logger/drain"
 )
 
-const logRoot = "/data/logs"
+var LogRoot string
 
 type handler struct {
 	// To simplify implementation of our handler we embed helper
@@ -49,7 +51,7 @@ func getLogFile(message string) (io.Writer, error) {
 		return nil, fmt.Errorf("Could not find app name in message: %s", message)
 	}
 	appName := match[1]
-	filePath := path.Join(logRoot, appName+".log")
+	filePath := path.Join(LogRoot, appName+".log")
 	// check if file exists
 	exists, err := fileExists(filePath)
 	if err != nil {
@@ -82,6 +84,10 @@ func (h *handler) mainLoop() {
 		if m == nil {
 			break
 		}
+		d := drain.GetDrain()
+		if d != "" {
+			drain.SendToDrain(m.String(), d)
+		}
 		err := writeToDisk(m)
 		if err != nil {
 			log.Println(err)
@@ -91,12 +97,19 @@ func (h *handler) mainLoop() {
 }
 
 // Listen starts a new syslog server which runs until it receives a signal.
-func Listen(signalChan chan os.Signal, cleanupDone chan bool) {
+func Listen(signalChan chan os.Signal, cleanupDone chan bool, bindAddr string) {
 	fmt.Println("Starting syslog...")
+	// If LogRoot doesn't exist, create it
+	// equivalent to Python's `if not os.path.exists(filename)`
+	if _, err := os.Stat(LogRoot); os.IsNotExist(err) {
+		if err = os.MkdirAll(LogRoot, 0777); err != nil {
+			log.Fatalf("unable to create LogRoot at %s: %v", LogRoot, err)
+		}
+	}
 	// Create a server with one handler and run one listen gorutine
 	s := syslog.NewServer()
 	s.AddHandler(newHandler())
-	s.Listen("0.0.0.0:514")
+	s.Listen(bindAddr)
 	fmt.Println("Syslog server started...")
 	fmt.Println("deis-logger running")
 

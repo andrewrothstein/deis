@@ -37,29 +37,14 @@ First, use the current ``deisctl`` to stop and uninstall the Deis platform.
     1.0.2
     $ deisctl stop platform && deisctl uninstall platform
 
-There are important security fixes since Deis 1.0.2 that require upgrading
-to CoreOS 494.1.0 or later, and configuring Docker to access deis-registry. See
-:ref:`upgrading-coreos` first, then open a shell to each node:
-
-.. code-block:: console
-
-    $ ssh deis-1.example.com  # repeat these steps for each node
-    $ sudo -i
-    $ mkdir -p /etc/systemd/system/docker.service.d
-    $ cat <<EOF > /etc/systemd/system/docker.service.d/50-insecure-registry.conf
-    [Service]
-    Environment="DOCKER_OPTS=--insecure-registry 10.0.0.0/8 --insecure-registry 172.16.0.0/12 --insecure-registry 192.168.0.0/16"
-    EOF
-    $ reboot  # one node at a time, to avoid etcd failures
-
 Finally, update ``deisctl`` to the new version and reinstall:
 
 .. code-block:: console
 
-    $ curl -sSL http://deis.io/deisctl/install.sh | sh -s 1.2.0
+    $ curl -sSL http://deis.io/deisctl/install.sh | sh -s 1.5.2
     $ deisctl --version  # should match the desired platform
-    1.2.0
-    $ deisctl config platform set version=v1.2.0
+    1.5.2
+    $ deisctl config platform set version=v1.5.2
     $ deisctl install platform
     $ deisctl start platform
 
@@ -67,6 +52,11 @@ Finally, update ``deisctl`` to the new version and reinstall:
 
     In-place upgrades incur approximately 10-30 minutes of downtime for deployed applications, the router mesh
     and the platform control plane.  Please plan your maintenance windows accordingly.
+
+Upgrade Deis clients
+^^^^^^^^^^^^^^^^^^^^
+As well as upgrading ``deisctl``, make sure to upgrade the :ref:`deis client <install-client>` to
+match the new version of Deis.
 
 
 Migration Upgrade
@@ -178,8 +168,11 @@ Once all applications have been validated, the old cluster can be retired.
 Upgrading CoreOS
 ----------------
 
-By default, Deis disables CoreOS automatic updates. This is partially because of problems we've seen
-with etcd/fleet version incompatibilities as hosts in the cluster are upgraded one-by-one.
+By default, Deis disables CoreOS automatic updates. This is partially because in the case of a
+machine reboot, Deis components will be scheduled to a new host and will need a few minutes to start
+and restore to a running state. This results in a short downtime of the Deis control plane,
+which can be disruptive if unplanned.
+
 Additionally, because Deis customizes the CoreOS cloud-config file, upgrading the CoreOS host to
 a new version without accounting for changes in the cloud-config file could cause Deis to stop
 functioning properly.

@@ -18,6 +18,7 @@ var (
 	appsRunCmd             = "apps:run echo Hello, 世界"
 	appsOpenCmd            = "apps:open --app={{.AppName}}"
 	appsLogsCmd            = "apps:logs --app={{.AppName}}"
+	appsLogsLimitCmd       = "apps:logs --app={{.AppName}} -n 1"
 	appsInfoCmd            = "apps:info --app={{.AppName}}"
 	appsDestroyCmd         = "apps:destroy --app={{.AppName}} --confirm={{.AppName}}"
 	appsDestroyCmdNoApp    = "apps:destroy --confirm={{.AppName}}"
@@ -62,7 +63,7 @@ func appsCreateTest(t *testing.T, params *utils.DeisTestConfig) {
 	utils.Execute(t, appsCreateCmdBuildpack, params, false, "BUILDPACK_URL")
 	utils.Execute(t, appsDestroyCmdNoApp, params, false, "")
 	utils.Execute(t, appsCreateCmd, params, false, "")
-	utils.Execute(t, appsCreateCmd, params, true, "App with this Id already exists")
+	utils.Execute(t, appsCreateCmd, params, true, "This field must be unique.")
 }
 
 func appsDestroyTest(t *testing.T, params *utils.DeisTestConfig) {
@@ -94,16 +95,19 @@ func appsLogsTest(t *testing.T, params *utils.DeisTestConfig) {
 		t.Fatal(err)
 	}
 	utils.Execute(t, gitPushCmd, params, false, "")
-	utils.Curl(t, params)
+	utils.CurlApp(t, *params)
 	utils.Execute(t, cmd, params, false, "created initial release")
 	utils.Execute(t, cmd, params, false, "listening on 5000...")
+
+	utils.Execute(t, appsLogsLimitCmd, params, false, "")
+
 	if err := utils.Chdir(".."); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func appsOpenTest(t *testing.T, params *utils.DeisTestConfig) {
-	utils.Curl(t, params)
+	utils.CurlApp(t, *params)
 }
 
 func appsRunTest(t *testing.T, params *utils.DeisTestConfig) {

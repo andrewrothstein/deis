@@ -18,7 +18,7 @@ Logspout is a very small Docker container, so you can just pull it from the inde
 
 The simplest way to use logspout is to just take all logs and ship to a remote syslog. Just pass a default syslog target URI as the command. Also, we always mount the Docker Unix socket with `-v` to `/tmp/docker.sock`:
 
-	$ docker run -v=/var/run/docker.sock:/tmp/docker.sock deis/logspout syslog://logs.papertrailapp.com:55555
+	$ docker run -v=/var/run/docker.sock:/tmp/docker.sock deis/logspout /bin/logspout syslog://logs.papertrailapp.com:55555
 
 If deis/logspout is deployed on Deis, it will connect automatically to deis-logger via service discovery.
 
@@ -47,6 +47,10 @@ That example creates a new syslog route to [Papertrail](https://papertrailapp.co
 By default, routes are ephemeral. But if you mount a volume to `/mnt/routes`, they will be persisted to disk.
 
 See [Routes Resource](#routes-resource) for all options.
+
+#### Using a custom timestamp format
+
+By default, logspout will use the timestamp format `2006-01-02T15:04:05MST`. A custom format can be specified by setting the `DATETIME_FORMAT` environment variable.
 
 ## HTTP API
 

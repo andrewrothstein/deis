@@ -14,7 +14,7 @@ FORMAT_EPHEMERAL_VOLUME = '''
   Type=oneshot
   RemainAfterExit=yes
   ExecStart=/usr/sbin/wipefs -f /dev/xvdb
-  ExecStart=/usr/sbin/mkfs.ext4 /dev/xvdb
+  ExecStart=/usr/sbin/mkfs.ext4 -i 4096 -b 4096 /dev/xvdb
   ExecStart=/bin/touch /etc/ephemeral-volume-formatted
 '''
 MOUNT_EPHEMERAL_VOLUME = '''
@@ -47,7 +47,7 @@ FORMAT_DOCKER_VOLUME = '''
   Type=oneshot
   RemainAfterExit=yes
   ExecStart=/usr/sbin/wipefs -f /dev/xvdf
-  ExecStart=/usr/sbin/mkfs.btrfs -f /dev/xvdf
+  ExecStart=/usr/sbin/mkfs.ext4 -i 4096 -b 4096 /dev/xvdf
   ExecStart=/bin/touch /etc/docker-volume-formatted
 '''
 MOUNT_DOCKER_VOLUME = '''
@@ -59,7 +59,7 @@ MOUNT_DOCKER_VOLUME = '''
   [Mount]
   What=/dev/xvdf
   Where=/var/lib/docker
-  Type=btrfs
+  Type=ext4
 '''
 
 new_units = [
@@ -89,6 +89,7 @@ template['Parameters']['ClusterSize']['Default'] = str(os.getenv('DEIS_NUM_INSTA
 
 VPC_ID = os.getenv('VPC_ID', None)
 VPC_SUBNETS = os.getenv('VPC_SUBNETS', None)
+VPC_PRIVATE_SUBNETS = os.getenv('VPC_PRIVATE_SUBNETS', VPC_SUBNETS)
 VPC_ZONES = os.getenv('VPC_ZONES', None)
 
 if VPC_ID and VPC_SUBNETS and VPC_ZONES and len(VPC_SUBNETS.split(',')) == len(VPC_ZONES.split(',')):
@@ -111,7 +112,7 @@ if VPC_ID and VPC_SUBNETS and VPC_ZONES and len(VPC_SUBNETS.split(',')) == len(V
 
   # update subnets and zones
   template['Resources']['CoreOSServerAutoScale']['Properties']['AvailabilityZones'] = VPC_ZONES.split(',')
-  template['Resources']['CoreOSServerAutoScale']['Properties']['VPCZoneIdentifier'] = VPC_SUBNETS.split(',')
+  template['Resources']['CoreOSServerAutoScale']['Properties']['VPCZoneIdentifier'] = VPC_PRIVATE_SUBNETS.split(',')
   template['Resources']['DeisWebELB']['Properties']['Subnets'] = VPC_SUBNETS.split(',')
 
 print json.dumps(template)

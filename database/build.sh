@@ -18,9 +18,12 @@ apt-get update && apt-get install -yq \
                                       daemontools \
                                       file \
                                       gcc \
+                                      g++ \
                                       git \
+                                      libffi-dev \
                                       libxml2-dev \
                                       libxslt1-dev \
+                                      libssl-dev \
                                       lzop \
                                       postgresql-9.3 \
                                       pv \
@@ -29,14 +32,14 @@ apt-get update && apt-get install -yq \
 /etc/init.d/postgresql stop
 
 # install pip
-curl -sSL https://raw.githubusercontent.com/pypa/pip/1.5.6/contrib/get-pip.py | python -
+curl -sSL https://raw.githubusercontent.com/pypa/pip/6.1.1/contrib/get-pip.py | python -
 
 # install wal-e
 cd /tmp
 git clone https://github.com/wal-e/wal-e.git
 
 cd /tmp/wal-e
-git checkout dbf9783
+git checkout v0.8c2
 
 pip install .
 
@@ -44,10 +47,10 @@ mkdir -p /etc/wal-e.d/env
 
 chown -R root:postgres /etc/wal-e.d
 
-# cleanup. indicate that python, libpq and libyanl are required packages.
-apt-mark unmarkauto python curl daemontools file libxml2-dev \
-  libxslt1-dev lzop postgresql-9.3 pv && \
-  apt-get remove -y --purge python-dev gcc cpp libpq-dev libyaml-dev git && \
+# cleanup. indicate python, curl, and others as required packages.
+apt-mark unmarkauto python curl daemontools file libffi-dev libxml2-dev \
+  libxslt1-dev libssl-dev lzop postgresql-9.3 pv && \
+  apt-get remove -y --purge gcc g++ git python-dev && \
   apt-get autoremove -y --purge && \
   apt-get clean -y && \
   rm -Rf /usr/share/man /usr/share/doc && \

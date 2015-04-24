@@ -46,11 +46,11 @@ func ListUnitFiles(argv []string, b backend.Backend) error {
 }
 
 // Scale grows or shrinks the number of running components.
-// Currently "router" and "registry" are the only types that can be scaled.
+// Currently "router", "registry" and "store-gateway" are the only types that can be scaled.
 func Scale(argv []string, b backend.Backend) error {
 	usage := `Grows or shrinks the number of running components.
 
-Currently "router" and "registry" are the only types that can be scaled.
+Currently "router", "registry" and "store-gateway" are the only types that can be scaled.
 
 Usage:
   deisctl scale [<target>...] [options]
@@ -74,7 +74,7 @@ Usage:
 			return err
 		}
 		// the router is the only component that can scale at the moment
-		if !strings.Contains(component, "router") && !strings.Contains(component, "registry") {
+		if !strings.Contains(component, "router") && !strings.Contains(component, "registry") && !strings.Contains(component, "store-gateway") {
 			return fmt.Errorf("cannot scale %s components", component)
 		}
 		b.Scale(component, num, &wg, outchan, errchan)
@@ -171,7 +171,7 @@ func startDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	wg.Wait()
 
 	// we start gateway first to give metadata time to come up for volume
-	b.Start([]string{"store-gateway"}, wg, outchan, errchan)
+	b.Start([]string{"store-gateway@*"}, wg, outchan, errchan)
 	wg.Wait()
 	b.Start([]string{"store-volume"}, wg, outchan, errchan)
 	wg.Wait()
@@ -183,17 +183,13 @@ func startDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	b.Start([]string{"logspout"}, wg, outchan, errchan)
 	wg.Wait()
 
-	// optimization: start all remaining services in the background
-	// cache is a special case because it must start before registry
-	b.Start([]string{"cache"}, &_wg, _outchan, _errchan)
-	wg.Wait()
 	b.Start([]string{
-		"database", "registry@1", "controller", "builder",
-		"publisher", "router@1", "router@2", "router@3"},
+		"database", "registry@*", "controller", "builder",
+		"publisher", "router@*"},
 		&_wg, _outchan, _errchan)
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Start([]string{"cache", "database", "registry@1", "controller"}, wg, outchan, errchan)
+	b.Start([]string{"database", "registry@*", "controller"}, wg, outchan, errchan)
 	wg.Wait()
 	b.Start([]string{"builder"}, wg, outchan, errchan)
 	wg.Wait()
@@ -203,7 +199,7 @@ func startDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Routing mesh...")
-	b.Start([]string{"router@1", "router@2", "router@3"}, wg, outchan, errchan)
+	b.Start([]string{"router@*"}, wg, outchan, errchan)
 	wg.Wait()
 }
 
@@ -264,7 +260,7 @@ func StopPlatform(b backend.Backend) error {
 func stopDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan string, errchan chan error) {
 
 	outchan <- fmt.Sprintf("Routing mesh...")
-	b.Stop([]string{"router@1", "router@2", "router@3"}, wg, outchan, errchan)
+	b.Stop([]string{"router@*"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Data plane...")
@@ -272,9 +268,7 @@ func stopDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan str
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Stop([]string{"controller", "builder", "database", "registry@1"}, wg, outchan, errchan)
-	wg.Wait()
-	b.Stop([]string{"cache"}, wg, outchan, errchan)
+	b.Stop([]string{"controller", "builder", "database", "registry@*"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Logging subsystem...")
@@ -282,7 +276,7 @@ func stopDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan str
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Storage subsystem...")
-	b.Stop([]string{"store-volume", "store-gateway"}, wg, outchan, errchan)
+	b.Stop([]string{"store-volume", "store-gateway@*"}, wg, outchan, errchan)
 	wg.Wait()
 	b.Stop([]string{"store-metadata"}, wg, outchan, errchan)
 	wg.Wait()
@@ -428,7 +422,7 @@ func InstallPlatform(b backend.Backend) error {
 func installDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan string, errchan chan error) {
 
 	outchan <- fmt.Sprintf("Storage subsystem...")
-	b.Create([]string{"store-daemon", "store-monitor", "store-metadata", "store-volume", "store-gateway"}, wg, outchan, errchan)
+	b.Create([]string{"store-daemon", "store-monitor", "store-metadata", "store-volume", "store-gateway@1"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Logging subsystem...")
@@ -436,7 +430,7 @@ func installDefaultServices(b backend.Backend, wg *sync.WaitGroup, outchan chan 
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Create([]string{"cache", "database", "registry@1", "controller", "builder"}, wg, outchan, errchan)
+	b.Create([]string{"database", "registry@1", "controller", "builder"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Data plane...")
@@ -508,7 +502,7 @@ func UninstallPlatform(b backend.Backend) error {
 func uninstallAllServices(b backend.Backend, wg *sync.WaitGroup, outchan chan string, errchan chan error) error {
 
 	outchan <- fmt.Sprintf("Routing mesh...")
-	b.Destroy([]string{"router@1", "router@2", "router@3"}, wg, outchan, errchan)
+	b.Destroy([]string{"router@*"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Data plane...")
@@ -516,7 +510,7 @@ func uninstallAllServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Control plane...")
-	b.Destroy([]string{"controller", "builder", "cache", "database", "registry@1"}, wg, outchan, errchan)
+	b.Destroy([]string{"controller", "builder", "database", "registry@*"}, wg, outchan, errchan)
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Logging subsystem...")
@@ -524,7 +518,7 @@ func uninstallAllServices(b backend.Backend, wg *sync.WaitGroup, outchan chan st
 	wg.Wait()
 
 	outchan <- fmt.Sprintf("Storage subsystem...")
-	b.Destroy([]string{"store-volume", "store-gateway"}, wg, outchan, errchan)
+	b.Destroy([]string{"store-volume", "store-gateway@*"}, wg, outchan, errchan)
 	wg.Wait()
 	b.Destroy([]string{"store-metadata"}, wg, outchan, errchan)
 	wg.Wait()
@@ -653,6 +647,7 @@ Options:
 		"deis-publisher.service",
 		"deis-registry.service",
 		"deis-router.service",
+		"deis-store-admin.service",
 		"deis-store-daemon.service",
 		"deis-store-gateway.service",
 		"deis-store-metadata.service",

@@ -52,9 +52,12 @@ from .test_auth import *  # noqa
 from .test_build import *  # noqa
 from .test_config import *  # noqa
 from .test_domain import *  # noqa
+from .test_certificate import *  # noqa
 from .test_container import *  # noqa
 from .test_hooks import *  # noqa
 from .test_key import *  # noqa
 from .test_perm import *  # noqa
 from .test_release import *  # noqa
 from .test_scheduler import *  # noqa
+from .test_users import *  # noqa
+from .test_limits import *  # noqa

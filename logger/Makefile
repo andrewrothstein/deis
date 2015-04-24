@@ -1,18 +1,25 @@
 include ../includes.mk
 
-COMPONENT = logger
+# the filepath to this repository, relative to $GOPATH/src
+repo_path = github.com/deis/deis/logger
+
+GO_FILES = main.go
+GO_PACKAGES = syslog syslogd tests
+GO_PACKAGES_REPO_PATH = $(addprefix $(repo_path)/,$(GO_PACKAGES))
+GO_TESTABLE_PACKAGES_REPO_PATH = $(addprefix $(repo_path)/,syslog syslogd)
+
+COMPONENT = $(notdir $(repo_path))
 IMAGE = $(IMAGE_PREFIX)$(COMPONENT):$(BUILD_TAG)
-BUILD_IMAGE := $(COMPONENT)-build
 DEV_IMAGE = $(DEV_REGISTRY)/$(IMAGE)
+BINARY_DEST_DIR = image/bin
 
 build: check-docker
-	docker build -t $(BUILD_IMAGE) .
-	docker cp `docker run -d $(BUILD_IMAGE)`:/go/bin/logger image/bin/
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 godep go build -a -installsuffix cgo -ldflags '-s' -o $(BINARY_DEST_DIR)/logger github.com/deis/deis/logger || exit 1
+	$(call check-static-binary,$(BINARY_DEST_DIR)/logger)
 	docker build -t $(IMAGE) image
-	rm -rf image/bin/logger
-	-docker rm -f `docker ps | grep logger-build | awk '{print $$1}'`
 
 clean: check-docker check-registry
+	rm -f image/bin/logger
 	docker rmi $(IMAGE)
 
 full-clean: check-docker check-registry
@@ -37,7 +44,7 @@ run: install start
 dev-release: push set-image
 
 push: check-registry
-	docker tag $(IMAGE) $(DEV_IMAGE)
+	docker tag -f $(IMAGE) $(DEV_IMAGE)
 	docker push $(DEV_IMAGE)
 
 set-image: check-deisctl
@@ -48,8 +55,6 @@ release:
 
 deploy: build dev-release restart
 
-test: test-unit test-functional
-
 setup-root-gotools:
 	sudo GOPATH=/tmp/tmpGOPATH go get -u -v code.google.com/p/go.tools/cmd/cover
 	sudo GOPATH=/tmp/tmpGOPATH go get -u -v code.google.com/p/go.tools/cmd/vet
@@ -58,16 +63,21 @@ setup-root-gotools:
 setup-gotools:
 	go get -v github.com/golang/lint/golint
 
-test-style:
-	go vet -x ./...
-	-golint ./...
-
-test-unit: test-style
-	go test -v -cover ./syslog
+test: test-style test-unit test-functional
 
 test-functional:
 	@docker history deis/test-etcd >/dev/null 2>&1 || docker pull deis/test-etcd:latest
 	GOPATH=`cd ../tests/ && godep path`:$(GOPATH) go test -v ./tests/...
+
+test-style:
+# display output, then check
+	$(GOFMT) $(GO_PACKAGES) $(GO_FILES)
+	@$(GOFMT) $(GO_PACKAGES) $(GO_FILES) | read; if [ $$? == 0 ]; then echo "gofmt check failed."; exit 1; fi
+	$(GOVET) $(repo_path) $(GO_PACKAGES_REPO_PATH)
+	$(GOLINT) ./...
+
+test-unit: test-style
+	$(GOTEST) $(GO_TESTABLE_PACKAGES_REPO_PATH)
 
 coverage:
 	go test -coverprofile coverage.out ./syslog

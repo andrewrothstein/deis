@@ -1,6 +1,13 @@
 include ../includes.mk
 
-COMPONENT = router
+# the filepath to this repository, relative to $GOPATH/src
+repo_path = github.com/deis/deis/router
+
+GO_FILES = boot.go
+GO_PACKAGES = logger tests
+GO_PACKAGES_REPO_PATH = $(addprefix $(repo_path)/,$(GO_PACKAGES))
+
+COMPONENT = $(notdir $(repo_path))
 IMAGE = $(IMAGE_PREFIX)$(COMPONENT):$(BUILD_TAG)
 DEV_IMAGE = $(DEV_REGISTRY)/$(IMAGE)
 BUILD_IMAGE = $(COMPONENT)-build
@@ -10,6 +17,7 @@ build: check-docker
 	docker build -t $(BUILD_IMAGE) .
 	docker cp `docker run -d $(BUILD_IMAGE)`:/nginx.tgz image/
 	docker cp `docker run -d $(BUILD_IMAGE)`:/go/bin/boot image/bin/
+	$(call check-static-binary,image/bin/boot)
 	docker build -t $(IMAGE) image
 	rm image/nginx.tgz
 	rm image/bin/boot
@@ -28,14 +36,10 @@ uninstall: check-deisctl
 	deisctl scale $(COMPONENT)=0
 
 start: check-deisctl
-	deisctl start $(COMPONENT)@1
-	deisctl start $(COMPONENT)@2
-	deisctl start $(COMPONENT)@3
+	deisctl start $(COMPONENT)@*
 
 stop: check-deisctl
-	deisctl stop $(COMPONENT)@1
-	deisctl stop $(COMPONENT)@2
-	deisctl stop $(COMPONENT)@3
+	deisctl stop $(COMPONENT)@*
 
 restart: stop start
 
@@ -44,7 +48,7 @@ run: install start
 dev-release: push set-image
 
 push: check-registry
-	docker tag $(IMAGE) $(DEV_IMAGE)
+	docker tag -f $(IMAGE) $(DEV_IMAGE)
 	docker push $(DEV_IMAGE)
 
 set-image: check-deisctl
@@ -55,11 +59,18 @@ release:
 
 deploy: build dev-release restart
 
-test: test-unit test-functional
-
-test-unit:
-	@echo no unit tests
+test: test-style test-unit test-functional
 
 test-functional:
 	@docker history deis/test-etcd >/dev/null 2>&1 || docker pull deis/test-etcd:latest
 	GOPATH=`cd ../tests/ && godep path`:$(GOPATH) go test -v ./tests/...
+
+test-style:
+# display output, then check
+	$(GOFMT) $(GO_PACKAGES) $(GO_FILES)
+	@$(GOFMT) $(GO_PACKAGES) $(GO_FILES) | read; if [ $$? == 0 ]; then echo "gofmt check failed."; exit 1; fi
+	$(GOVET) $(repo_path) $(GO_PACKAGES_REPO_PATH)
+	$(GOLINT) ./...
+
+test-unit:
+	@echo no unit tests

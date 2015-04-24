@@ -3,7 +3,7 @@
 # builder hook called on every git receive-pack
 # NOTE: this script must be run as root (for docker access)
 #
-set -e
+set -eo pipefail
 
 ARGS=3
 
@@ -56,7 +56,7 @@ CACHE_DIR="${REPO_DIR}/cache"
 
 # define image names
 IMAGE_NAME="$APP_NAME:git-$SHORT_SHA"
-TMP_IMAGE="{{ .deis_registry_host }}:{{ .deis_registry_port }}/$IMAGE_NAME"
+TMP_IMAGE="{{ getv "/deis/registry/host" }}:{{ getv "/deis/registry/port" }}/$IMAGE_NAME"
 
 # create app directories
 mkdir -p $BUILD_DIR $CACHE_DIR
@@ -75,13 +75,9 @@ if [ -f Dockerfile ]; then
     USING_DOCKERFILE=true
 fi
 
-if [ -f Procfile ]; then
-    PROCFILE=$(cat Procfile)
-fi
-
 # pull config from controller to be used during build
-URL="{{ .deis_controller_protocol }}://{{ .deis_controller_host }}:{{ .deis_controller_port }}/v1/hooks/config"
-RESPONSE=$(/app/bin/get-app-config -url="$URL" -key="{{ .deis_controller_builderKey }}" -user=$USER -app=$APP_NAME)
+URL="{{ getv "/deis/controller/protocol" }}://{{ getv "/deis/controller/host" }}:{{ getv "/deis/controller/port" }}/v1/hooks/config"
+RESPONSE=$(/app/bin/get-app-config -url="$URL" -key="{{ getv "/deis/controller/builderKey" }}" -user=$USER -app=$APP_NAME)
 CODE=$?
 
 if [ $CODE -ne 0 ]; then
@@ -91,19 +87,13 @@ fi
 
 BUILD_OPTS=()
 BUILD_OPTS+='/usr/bin/docker'
-BUILD_OPTS+=' run '
+BUILD_OPTS+=' run -v /etc/environment_proxy:/etc/environment_proxy'
 # get application configuration
 BUILD_OPTS+=$(echo $RESPONSE | /app/bin/get-app-values)
 
 # if no Dockerfile is present, use slugbuilder to compile a heroku slug
 # and write out a Dockerfile to use that slug
 if [ ! -f Dockerfile ]; then
-    if [ -f /buildpacks ]; then
-        BUILD_OPTS+=' -v /buildpacks:/tmp/buildpacks:rw'
-        # give non-root slugbuilder user R/W perms for docker volumes
-        chown -R 2000:2000 /buildpacks
-    fi
-
     # run in the background, we'll attach to it to retrieve logs
     BUILD_OPTS+=' -d'
     BUILD_OPTS+=' -v '
@@ -112,8 +102,13 @@ if [ ! -f Dockerfile ]; then
     BUILD_OPTS+=' -v '
     BUILD_OPTS+=$(echo $CACHE_DIR)
     BUILD_OPTS+=':/tmp/cache:rw'
-    # give non-root slugbuilder user R/W perms for docker volumes
-    chown -R 2000:2000 $TMP_DIR $CACHE_DIR
+    # give slug group ownership of TMP_DIR and CACHE_DIR.
+    chown -R :2000 $TMP_DIR
+    chown :2000 $CACHE_DIR
+    # TMP_DIR is created using mktemp, which sets permissions to 700. Since
+    # we share this with the slug group, the slug group needs to be able to
+    # work with it.
+    chmod g+rwx $TMP_DIR
 
     BUILD_OPTS+=' deis/slugbuilder'
 
@@ -139,24 +134,26 @@ puts-step "Pushing image to private registry"
 docker push $TMP_IMAGE  &>/dev/null
 echo
 
-if [ -f $TMP_DIR/slug.tgz ]; then
-    RELEASE_INFO=$(tar --to-stdout -xf $TMP_DIR/slug.tgz ./.release | /app/bin/extract-types)
-else
-    RELEASE_INFO="{}"
-fi
-
-if [ "$RELEASE_INFO" == "{}" ]; then
-    if [ -f $TMP_DIR/Procfile ]; then
-        # fall back to Procfile if there's no default process types
-        # FIXME: refactor into slugbuilder
-        RELEASE_INFO=$(cat $TMP_DIR/Procfile | /app/bin/yaml2json-procfile)
+# use Procfile if provided, otherwise try default process types from ./release
+if [ -f Procfile ]; then
+    PROCFILE=$(cat Procfile | /app/bin/yaml2json-procfile)
+elif [ -f $TMP_DIR/slug.tgz ]; then
+    # Sometimes, the buildpack will generate a Procfile instead of populating /bin/release
+    # /bin/release was unofficially deprecated for declaring default process types
+    if tar -tf $TMP_DIR/slug.tgz ./Procfile &> /dev/null;
+    then
+        PROCFILE="$(tar --to-stdout -xf $TMP_DIR/slug.tgz ./Procfile | /app/bin/yaml2json-procfile)"
+    else
+        PROCFILE=$(tar --to-stdout -xf $TMP_DIR/slug.tgz ./.release | /app/bin/extract-types)
     fi
+else
+    PROCFILE="{}"
 fi
 
 puts-step "Launching... "
-URL="{{ .deis_controller_protocol }}://{{ .deis_controller_host }}:{{ .deis_controller_port }}/v1/hooks/build"
-DATA=$(/app/bin/generate-buildhook "$SHORT_SHA" "$USER" "$APP_NAME" "$APP_NAME" "$RELEASE_INFO" "$USING_DOCKERFILE")
-PUBLISH_RELEASE=$(echo "$DATA" | /app/bin/publish-release-controller -url=$URL -key={{ .deis_controller_builderKey }})
+URL="{{ getv "/deis/controller/protocol" }}://{{ getv "/deis/controller/host" }}:{{ getv "/deis/controller/port" }}/v1/hooks/build"
+DATA=$(/app/bin/generate-buildhook "$SHORT_SHA" "$USER" "$APP_NAME" "$APP_NAME" "$PROCFILE" "$USING_DOCKERFILE")
+PUBLISH_RELEASE=$(echo "$DATA" | /app/bin/publish-release-controller -url=$URL -key={{ getv "/deis/controller/builderKey" }})
 
 CODE=$?
 if [ $CODE -ne 0 ]; then

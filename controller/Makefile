@@ -36,7 +36,7 @@ run: install start
 dev-release: push set-image
 
 push: check-registry
-	docker tag $(IMAGE) $(DEV_IMAGE)
+	docker tag -f $(IMAGE) $(DEV_IMAGE)
 	docker push $(DEV_IMAGE)
 
 set-image: check-deisctl
@@ -67,7 +67,8 @@ test-style: setup-venv
 	venv/bin/flake8
 
 test-unit: setup-venv test-style
-	venv/bin/python manage.py test --noinput api
+	venv/bin/coverage run manage.py test --noinput api
+	venv/bin/coverage report -m
 
 test-functional:
 	@docker history deis/test-etcd >/dev/null 2>&1 || docker pull deis/test-etcd:latest

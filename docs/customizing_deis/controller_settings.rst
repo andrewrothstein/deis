@@ -39,7 +39,7 @@ The following etcd keys are used by the controller component.
 ====================================      ======================================================
 setting                                   description
 ====================================      ======================================================
-/deis/controller/registrationEnabled      enable registration for new Deis users (default: true)
+/deis/controller/registrationMode         set registration to "enabled", "disabled", or "admin_only" (default: "enabled")
 /deis/controller/webEnabled               enable controller web UI (default: false)
 /deis/cache/host                          host of the cache component (set by cache)
 /deis/cache/port                          port of the cache component (set by cache)
@@ -77,9 +77,9 @@ Deis. Specifically, ensure that it sets and reads appropriate etcd keys.
 
 Unit hostname
 -------------
-Per default, Docker automatically generates a hostname for your application unit, such as: 
-``5c149b397cd6``. Auto generated hostnames is not always preferred. For instance, 
-New Relic would classify each Docker container as an unique server since they use hostname 
+Per default, Docker automatically generates a hostname for your application unit, such as:
+``5c149b397cd6``. Auto generated hostnames is not always preferred. For instance,
+New Relic would classify each Docker container as an unique server since they use hostname
 for grouping applications running on the same server together.
 
 Deis supports configuring hostname assignment through the ``unitHostname`` setting.
@@ -98,11 +98,58 @@ application
     The hostname is assigned based on the unit name. Example: ``dancing-cat.v2.web.1``
 
 server
-    The hostname is assigned based on the CoreOS hostname. Example: 
+    The hostname is assigned based on the CoreOS hostname. Example:
     ``ip-10-21-2-168.eu-west-1.compute.internal``
 
 .. note::
 
-    Changes to ``/deis/controller/unitHostname`` requires either pushing a new build to 
+    Changes to ``/deis/controller/unitHostname`` requires either pushing a new build to
     every application or scaling them down and up.
     The change is only detected when a container unit is deployed.
+
+Using a LDAP Auth
+-----------------
+Deis Controller supports Single Sign On access control, for now Deis is able to authenticate using LDAP or Active Directory.
+
+Settings used by LDAP
+^^^^^^^^^^^^^^^^^^^^^
+=========================================           =================================================================================
+setting                                             description
+=========================================           =================================================================================
+/deis/controller/auth/ldap/endpoint                 The full LDAP endpoint. (Ex.: ldap://ldap.company.com)
+/deis/controller/auth/ldap/bind/dn                  Full user for bind. (Ex.: user@company.com. For Anonymous bind leave blank)
+/deis/controller/auth/ldap/bind/password            Password of the user for bind. (For anonymous bind leave blank)
+/deis/controller/auth/ldap/user/basedn              The BASE DN where your LDAP Users are placed. (Ex.: OU=TeamX,DC=Company,DC=com)
+/deis/controller/auth/ldap/user/filter              The field that we will match with username of Deis. (In most cases is uuid, AD uses sAMAccountName)
+/deis/controller/auth/ldap/group/basedn             The BASE DN where the groups of your LDAP are are located. (Ex.: OU=Groups,OU=TeamX,DC=Company,DC=com)
+/deis/controller/auth/ldap/group/filter             The field that we will locate your groups with LDAPSearch. (In most cases is objectClass)
+/deis/controller/auth/ldap/group/type               The Groups type of LDAP. (Use groupOfNames if you don't know)
+=========================================           =================================================================================
+
+Configuring LDAP on Controller
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. important::
+
+    It's important that you register the first user of the default auth in order to have an admin ( see :ref:`Register a User <register-user>` ) without this you don't have any deis admin because LDAP users haven't this permission, you will need to set this later.
+    After this you need to disable the registration ( see :ref:`disable_user_registration` ) avoiding that "ghost" users register and access your Deis. The auth model of controller by default allows multiple source auths so LDAP and non-LDAP users will be able to login.
+
+
+.. code-block:: console
+
+    $ deisctl config controller set auth/ldap/endpoint=<ldap-endpoint>
+    $ deisctl config controller set auth/ldap/bind/dn=<bind-dn-full-user>
+    $ deisctl config controller set auth/ldap/bind/password=<bind-dn-user-password>
+    $ deisctl config controller set auth/ldap/user/basedn=<user-base-dn>
+    $ deisctl config controller set auth/ldap/user/filter=<user-filter>
+    $ deisctl config controller set auth/ldap/group/basedn=<group-base-dn>
+    $ deisctl config controller set auth/ldap/group/filter=<group-filter>
+    $ deisctl config controller set auth/ldap/group/type=<group-type>
+
+.. note::
+
+    You can set a LDAP user as admin by using ``deis perms:create <LDAP User> --admin`` with the admin created before.
+
+.. note::
+
+    LDAP support was contributed by community member Pedro Spagiari (`@phspagiari <http://github.com/phspagiari/>`_) and is unsupported by the Deis core team.

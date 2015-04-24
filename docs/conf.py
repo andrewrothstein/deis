@@ -22,14 +22,10 @@ import sys
 open(os.path.join('..', '__init__.py'), 'a')
 sys.path.insert(0, os.path.abspath(os.path.join('..')))
 sys.path.insert(0, os.path.abspath(os.path.join('..', 'controller')))
-# create local_settings.py for SECRET_KEY if necessary
-local_settings_path = os.path.abspath(
-    os.path.join('..', 'controller', 'deis', 'local_settings.py'))
-if not os.path.exists(local_settings_path):
-    with open(local_settings_path, 'w') as local_settings:
-        local_settings.write("SECRET_KEY = 'DummySecretKey'\n")
 # set up Django
 os.environ['DJANGO_SETTINGS_MODULE'] = 'deis.settings'
+os.environ['DATABASE_ENGINE'] = 'sqlite3'
+os.environ['DATABASE_NAME'] = 'dummy.sqlite3'
 from django.conf import settings  # noqa
 
 # -- General configuration -----------------------------------------------------
@@ -59,7 +55,7 @@ master_doc = 'toctree'
 
 # General information about the project.
 project = u'deis'
-copyright = u'2013, 2014 OpDemand LLC'
+copyright = u'2013, 2014 Engine Yard, Inc.'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -153,7 +149,7 @@ html_static_path = ['../controller/web/static']
 # typographically correct entities.
 html_use_smartypants = True
 
-html_add_permalinks = True
+# html_add_permalinks = '¶'
 
 # Custom sidebar templates, maps document names to template names.
 #html_sidebars = {}
@@ -274,9 +270,9 @@ texinfo_documents = [
 
 # Bibliographic Dublin Core info.
 epub_title = u'deis'
-epub_author = u'OpDemand LLC'
-epub_publisher = u'OpDemand LLC'
-epub_copyright = u'2013, OpDemand LLC'
+epub_author = u'Engine Yard, Inc.'
+epub_publisher = u'Engine Yard, Inc.'
+epub_copyright = u'2013, Engine Yard, Inc.'
 
 # The language of the text. It defaults to the language option
 # or en if the language is not set.

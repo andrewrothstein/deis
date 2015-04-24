@@ -1,5 +1,4 @@
-FROM flynn/busybox
-MAINTAINER OpDemand <info@opdemand.com>
+FROM busybox
 
 ENV DOCKER_HOST unix:///tmp/docker.sock
 ENV ROUTESPATH /tmp
@@ -7,5 +6,4 @@ CMD ["/bin/logspout"]
 
 ADD logspout /bin/logspout
 
-ENV DEIS_RELEASE 1.3.0-dev
-
+ENV DEIS_RELEASE 1.6.0-dev

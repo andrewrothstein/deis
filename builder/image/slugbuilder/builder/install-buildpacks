@@ -8,23 +8,35 @@ download_buildpack() {
     buildpack_name=$(basename $buildpack_url)
     buildpack_commit="$2"
 
-    git clone $buildpack_url $BUILDPACK_INSTALL_PATH/$buildpack_name
-    pushd $BUILDPACK_INSTALL_PATH/$buildpack_name 2>&1 >/dev/null
-        git checkout --quiet $buildpack_commit
-    popd 2>&1 >/dev/null
+    echo "Fetching $buildpack_name..."
+
+    set +e
+    git clone --branch $buildpack_commit --depth 1 $buildpack_url $BUILDPACK_INSTALL_PATH/$buildpack_name &>/dev/null
+    SHALLOW_CLONED=$?
+    set -e
+    if [ $SHALLOW_CLONED -ne 0 ]; then
+        # if the shallow clone failed partway through, clean up and try a full clone
+        rm -rf $BUILDPACK_INSTALL_PATH/$buildpack_name
+        git clone --quiet $buildpack_url $BUILDPACK_INSTALL_PATH/$buildpack_name
+        pushd $BUILDPACK_INSTALL_PATH/$buildpack_name &>/dev/null
+            git checkout --quiet $buildpack_commit
+        popd &>/dev/null
+    fi
+
+    echo "Done."
 }
 
 mkdir -p $BUILDPACK_INSTALL_PATH
 
 download_buildpack https://github.com/ddollar/heroku-buildpack-multi.git         6e79094
-download_buildpack https://github.com/heroku/heroku-buildpack-ruby.git           v129
-download_buildpack https://github.com/heroku/heroku-buildpack-nodejs.git         v62
+download_buildpack https://github.com/heroku/heroku-buildpack-ruby.git           v134
+download_buildpack https://github.com/heroku/heroku-buildpack-nodejs.git         v64
 download_buildpack https://github.com/heroku/heroku-buildpack-java.git           v32
-download_buildpack https://github.com/heroku/heroku-buildpack-gradle.git         24a8ebe
+download_buildpack https://github.com/heroku/heroku-buildpack-gradle.git         v12
 download_buildpack https://github.com/heroku/heroku-buildpack-grails.git         1ef927d
-download_buildpack https://github.com/heroku/heroku-buildpack-play.git           9c137b4
+download_buildpack https://github.com/heroku/heroku-buildpack-play.git           v22
 download_buildpack https://github.com/heroku/heroku-buildpack-python.git         v53
-download_buildpack https://github.com/heroku/heroku-buildpack-php.git            v50
+download_buildpack https://github.com/heroku/heroku-buildpack-php.git            v57
 download_buildpack https://github.com/heroku/heroku-buildpack-clojure.git        v63
 download_buildpack https://github.com/heroku/heroku-buildpack-scala.git          v43
 download_buildpack https://github.com/heroku/heroku-buildpack-go.git             0e20030

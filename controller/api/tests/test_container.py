@@ -9,11 +9,10 @@ from __future__ import unicode_literals
 import json
 import mock
 import requests
-import unittest
 
 from django.contrib.auth.models import User
 from django.test import TransactionTestCase
-from django_fsm import TransitionNotAllowed
+from scheduler.states import TransitionNotAllowed
 from rest_framework.authtoken.models import Token
 
 from api.models import App, Build, Container, Release
@@ -263,7 +262,8 @@ class ContainerTest(TransactionTestCase):
         self.assertEqual(response.data['results'][0]['release'], 'v2')
         # post a new build
         url = "/v1/apps/{app_id}/builds".format(**locals())
-        body = {'image': 'autotest/example'}
+        # a web proctype must exist on the second build or else the container will be removed
+        body = {'image': 'autotest/example', 'procfile': {'web': 'echo hi'}}
         response = self.client.post(url, json.dumps(body), content_type='application/json',
                                     HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 201)
@@ -304,7 +304,8 @@ class ContainerTest(TransactionTestCase):
         body = {'web': 'not_an_int'}
         response = self.client.post(url, json.dumps(body), content_type='application/json',
                                     HTTP_AUTHORIZATION='token {}'.format(self.token))
-        self.assertContains(response, 'Invalid scaling format', status_code=400)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data, {'detail': 'Invalid scaling format'})
         body = {'invalid': 1}
         response = self.client.post(url, json.dumps(body), content_type='application/json',
                                     HTTP_AUTHORIZATION='token {}'.format(self.token))
@@ -447,7 +448,7 @@ class ContainerTest(TransactionTestCase):
         response = self.client.post(url, json.dumps(body), content_type='application/json',
                                     HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data, "No build associated with this release")
+        self.assertEqual(response.data, {'detail': 'No build associated with this release'})
 
     def test_command_good(self):
         """Test the default command for each container workflow"""
@@ -541,12 +542,52 @@ class ContainerTest(TransactionTestCase):
         rc, output = c.run('echo hi')
         self.assertEqual(json.loads(output)['entrypoint'], '/runner/init')
 
-    @unittest.expectedFailure
+    def test_scaling_does_not_add_run_proctypes_to_structure(self):
+        """Test that app info doesn't show transient "run" proctypes."""
+        url = '/v1/apps'
+        response = self.client.post(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 201)
+        app_id = response.data['id']
+        app = App.objects.get(id=app_id)
+        user = User.objects.get(username='autotest')
+        # dockerfile + procfile worflow
+        build = Build.objects.create(owner=user,
+                                     app=app,
+                                     image="qwerty",
+                                     procfile={'web': 'node server.js',
+                                               'worker': 'node worker.js'},
+                                     dockerfile='foo',
+                                     sha='somereallylongsha')
+        # create an initial release
+        release = Release.objects.create(version=2,
+                                         owner=user,
+                                         app=app,
+                                         config=app.config_set.latest(),
+                                         build=build)
+        # create a run container manually to simulate how they persist
+        # when actually created by "deis apps:run".
+        c = Container.objects.create(owner=user,
+                                     app=app,
+                                     release=release,
+                                     type='run',
+                                     num=1)
+        # scale up
+        url = "/v1/apps/{app_id}/scale".format(**locals())
+        body = {'web': 3}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 204)
+        # test that "run" proctype isn't in the app info returned
+        url = "/v1/apps/{app_id}".format(**locals())
+        response = self.client.get(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('run', response.data['structure'])
+
     def test_scale_with_unauthorized_user_returns_403(self):
         """An unauthorized user should not be able to access an app's resources.
 
         If an unauthorized user is trying to scale an app he or she does not have access to, it
-        should return a 403. Currently, it returns a 404. FIXME!
+        should return a 403.
         """
         url = '/v1/apps'
         response = self.client.post(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
@@ -566,3 +607,30 @@ class ContainerTest(TransactionTestCase):
         response = self.client.post(url, json.dumps(body), content_type='application/json',
                                     HTTP_AUTHORIZATION='token {}'.format(unauthorized_token))
         self.assertEqual(response.status_code, 403)
+
+    def test_modified_procfile_from_build_removes_containers(self):
+        """
+        When a new procfile is posted which removes a certain process type, deis should stop the
+        existing containers.
+        """
+        url = '/v1/apps'
+        response = self.client.post(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 201)
+        app_id = response.data['id']
+        # post a new build
+        build_url = "/v1/apps/{app_id}/builds".format(**locals())
+        body = {'image': 'autotest/example', 'sha': 'a'*40,
+                'procfile': json.dumps({'web': 'node server.js', 'worker': 'node worker.js'})}
+        response = self.client.post(build_url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        url = "/v1/apps/{app_id}/scale".format(**locals())
+        body = {'web': 4}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 204)
+        body = {'image': 'autotest/example', 'sha': 'a'*40,
+                'procfile': json.dumps({'worker': 'node worker.js'})}
+        response = self.client.post(build_url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Container.objects.filter(type='web').count(), 0)

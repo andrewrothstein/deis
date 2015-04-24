@@ -3,8 +3,8 @@
 package tests
 
 import (
+	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +31,7 @@ func TestPs(t *testing.T) {
 	time.Sleep(time.Millisecond * 7000)
 
 	// test for a 503 response
-	utils.CurlWithFail(t, params, true, "503")
+	utils.CurlWithFail(t, fmt.Sprintf("http://%s.%s", params.AppName, params.Domain), true, "503")
 
 	utils.AppsDestroyTest(t, params)
 	utils.Execute(t, psScaleCmd, params, true, "404 NOT FOUND")
@@ -72,18 +72,4 @@ func psScaleTest(t *testing.T, params *utils.DeisTestConfig, cmd string) {
 		cmd = strings.Replace(cmd, "web", "cmd", 1)
 	}
 	utils.Execute(t, cmd, params, false, "")
-	// Regression test for https://github.com/deis/deis/pull/1347
-	// Ensure that systemd unitfile droppings are cleaned up.
-	sshCmd := exec.Command("ssh",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "PasswordAuthentication=no",
-		"core@deis."+params.Domain, "ls")
-	out, err := sshCmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(out), ".service") {
-		t.Fatalf("systemd files left on filesystem: \n%s", out)
-	}
 }

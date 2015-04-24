@@ -26,12 +26,17 @@ somewhere in your $PATH:
 
 Proxy Support
 -------------
-Set the ``http_proxy`` or ``https_proxy`` environment variable to enable proxy support:
+If your workstation uses a proxy to reach the network where the cluster lies,
+set the ``http_proxy`` or ``https_proxy`` environment variable to enable proxy support:
 
 .. code-block:: console
 
     $ export http_proxy="http://proxyip:port"
     $ export https_proxy="http://proxyip:port"
+
+.. note::
+
+    Configuring a proxy is generally not necessary for local Vagrant clusters.
 
 Integrated Help
 ---------------
@@ -73,3 +78,21 @@ To get help on subcommands, use ``deis help [subcommand]``:
 
 .. _pip: http://www.pip-installer.org/en/latest/installing.html
 .. _Python: https://www.python.org/
+
+Multiple Profile Support
+------------------------
+
+The Deis client supports running commands against multiple installations
+and/or accounts by setting the ``$DEIS_PROFILE`` environment variable
+before logging in and running any subsequent commands. If not set, all
+commands will default to the ``client`` profile which maps to
+a configuration file at ``$HOME/.deis/client.json``. Here's an example
+of running the ps command against an app with the same name from two profiles:
+
+
+.. code-block:: console
+
+    $ DEIS_PROFILE=production deis ps -a helloworld
+    $ DEIS_PROFILE=staging deis ps -a helloworld
+    
+

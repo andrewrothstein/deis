@@ -1,6 +1,9 @@
 #!/bin/bash
 set -eo pipefail
 
+if [[ -f /etc/environment_proxy ]]; then
+	source /etc/environment_proxy
+fi
 
 if [[ "$1" == "-" ]]; then
     slug_file="$1"
@@ -76,7 +79,39 @@ if [[ -n "$BUILDPACK_URL" ]]; then
 
     buildpack="$buildpack_root/custom"
     rm -fr "$buildpack"
-    git clone --quiet --depth=1 "$BUILDPACK_URL" "$buildpack"
+
+    url=${BUILDPACK_URL%#*}
+    committish=${BUILDPACK_URL#*#}
+
+    if [ "$committish" == "$url" ]; then
+        committish="master"
+    fi
+
+    if [[ -n "$SSH_KEY" ]]; then
+        mkdir -p ~/.ssh/
+        chmod 700 ~/.ssh/
+
+        echo $SSH_KEY | base64 -d > ~/.ssh/id_rsa
+        chmod 400 ~/.ssh/id_rsa
+
+        echo 'StrictHostKeyChecking=no' > ~/.ssh/config
+        chmod 600 ~/.ssh/config
+
+    fi
+
+    set +e
+    git clone --branch "$committish" --depth=1 "$url" "$buildpack" &> /dev/null
+    SHALLOW_CLONED=$?
+    set -e
+    if [ $SHALLOW_CLONED -ne 0 ]; then
+        # if the shallow clone failed partway through, clean up and try a full clone
+        rm -rf "$buildpack"
+        git clone --quiet "$url" "$buildpack"
+        pushd "$buildpack" &>/dev/null
+            git checkout --quiet "$committish"
+        popd &>/dev/null
+    fi
+
     selected_buildpack="$buildpack"
     buildpack_name=$($buildpack/bin/detect "$build_root") && selected_buildpack=$buildpack
 else

@@ -1,13 +1,16 @@
 import cStringIO
 import base64
 import copy
-import json
 import httplib
+import json
 import paramiko
 import socket
 import re
 import time
+
 from django.conf import settings
+
+from .states import JobState
 
 
 MATCH = re.compile(
@@ -41,17 +44,39 @@ class FleetHTTPClient(object):
 
     # connection helpers
 
-    def _put_unit(self, name, body):
+    def _request_unit(self, method, name, body=None):
         headers = {'Content-Type': 'application/json'}
-        self.conn.request('PUT', '/v1-alpha/units/{name}.service'.format(**locals()),
-                          headers=headers, body=json.dumps(body))
-        resp = self.conn.getresponse()
-        data = resp.read()
-        if not 200 <= resp.status <= 299:
-            errmsg = "Failed to create unit: {} {} - {}".format(
-                resp.status, resp.reason, data)
-            raise RuntimeError(errmsg)
-        return data
+        self.conn.request(method, '/v1-alpha/units/{name}.service'.format(**locals()),
+                                  headers=headers, body=json.dumps(body))
+        return self.conn.getresponse()
+
+    def _get_unit(self, name):
+        for attempt in range(RETRIES):
+            try:
+                resp = self._request_unit('GET', name)
+                data = resp.read()
+                if not 200 <= resp.status <= 299:
+                    errmsg = "Failed to retrieve unit: {} {} - {}".format(
+                        resp.status, resp.reason, data)
+                    raise RuntimeError(errmsg)
+                return data
+            except:
+                if attempt >= (RETRIES - 1):
+                    raise
+
+    def _put_unit(self, name, body):
+        for attempt in range(RETRIES):
+            try:
+                resp = self._request_unit('PUT', name, body)
+                data = resp.read()
+                if not 200 <= resp.status <= 299:
+                    errmsg = "Failed to create unit: {} {} - {}".format(
+                        resp.status, resp.reason, data)
+                    raise RuntimeError(errmsg)
+                return data
+            except:
+                if attempt >= (RETRIES - 1):
+                    raise
 
     def _delete_unit(self, name):
         headers = {'Content-Type': 'application/json'}
@@ -131,14 +156,8 @@ class FleetHTTPClient(object):
             tagset = ' '.join(['"{}={}"'.format(k, v) for k, v in tags.items()])
             unit.append({"section": "X-Fleet", "name": "MachineMetadata",
                          "value": tagset})
-        # post unit to fleet and retry
-        for attempt in range(RETRIES):
-            try:
-                self._put_unit(name, {"desiredState": "launched", "options": unit})
-                break
-            except:
-                if attempt == (RETRIES - 1):  # account for 0 indexing
-                    raise
+        # post unit to fleet
+        self._put_unit(name, {"desiredState": "loaded", "options": unit})
 
     def _get_hostname(self, application_name):
         hostname = settings.UNIT_HOSTNAME
@@ -155,31 +174,31 @@ class FleetHTTPClient(object):
 
     def start(self, name):
         """Start a container"""
-        self._wait_for_container(name)
+        self._put_unit(name, {'desiredState': 'launched'})
+        self._wait_for_container_running(name)
 
-    def _wait_for_container(self, name):
-        failures = 0
-        # we bump to 20 minutes here to match the timeout on the router and in the app unit files
-        for _ in range(1200):
+    def _wait_for_container_state(self, name):
+        # wait for container to get scheduled
+        for _ in range(30):
             states = self._get_state(name)
             if states and len(states.get('states', [])) == 1:
-                state = states.get('states')[0]
-                subState = state.get('systemdSubState')
-                if subState == 'running' or subState == 'exited':
-                    break
-                elif subState == 'failed':
-                    # FIXME: fleet unit state reports failed when containers are fine
-                    failures += 1
-                    if failures == 10:
-                        raise RuntimeError('container failed to start')
+                return states.get('states')[0]
             time.sleep(1)
         else:
-            raise RuntimeError('container timeout on start')
+            raise RuntimeError('container timeout while retrieving state')
+
+    def _wait_for_container_running(self, name):
+        # we bump to 20 minutes here to match the timeout on the router and in the app unit files
+        for _ in range(1200):
+            if self.state(name) == JobState.up:
+                return
+            time.sleep(1)
+        else:
+            raise RuntimeError('container failed to start')
 
     def _wait_for_destroy(self, name):
         for _ in range(30):
-            states = self._get_state(name)
-            if not states:
+            if not self._get_state(name):
                 break
             time.sleep(1)
         else:
@@ -211,91 +230,133 @@ class FleetHTTPClient(object):
         """Run a one-off command"""
         self._create_container(name, image, command, copy.deepcopy(RUN_TEMPLATE),
                                entrypoint=entrypoint)
-
+        # launch the container
+        self._put_unit(name, {'desiredState': 'launched'})
         # wait for the container to get scheduled
-        for _ in range(30):
-            states = self._get_state(name)
-            if states and len(states.get('states', [])) == 1:
-                state = states.get('states')[0]
-                break
-            time.sleep(1)
-        else:
-            raise RuntimeError('container did not report state')
-        machineID = state.get('machineID')
+        state = self._wait_for_container_state(name)
 
-        # find the machine
-        machines = self._get_machines()
-        if not machines:
-            raise RuntimeError('no available hosts to run command')
+        try:
+            machineID = state.get('machineID')
 
-        # find the machine's primaryIP
-        primaryIP = None
-        for m in machines.get('machines', []):
-            if m['id'] == machineID:
-                primaryIP = m['primaryIP']
-        if not primaryIP:
-            raise RuntimeError('could not find host')
+            # find the machine
+            machines = self._get_machines()
+            if not machines:
+                raise RuntimeError('no available hosts to run command')
 
-        # prepare ssh key
-        file_obj = cStringIO.StringIO(base64.b64decode(self.pkey))
-        pkey = paramiko.RSAKey(file_obj=file_obj)
+            # find the machine's primaryIP
+            primaryIP = None
+            for m in machines.get('machines', []):
+                if m['id'] == machineID:
+                    primaryIP = m['primaryIP']
+            if not primaryIP:
+                raise RuntimeError('could not find host')
 
-        # grab output via docker logs over SSH
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(primaryIP, username="core", pkey=pkey)
-        # share a transport
-        tran = ssh.get_transport()
+            # prepare ssh key
+            file_obj = cStringIO.StringIO(base64.b64decode(self.pkey))
+            pkey = paramiko.RSAKey(file_obj=file_obj)
 
-        def _do_ssh(cmd):
-            chan = tran.open_session()
-            # get a pty so stdout/stderr look right
-            chan.get_pty()
-            out = chan.makefile()
-            chan.exec_command(cmd)
-            rc, output = chan.recv_exit_status(), out.read()
-            return rc, output
+            # grab output via docker logs over SSH
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(primaryIP, username="core", pkey=pkey)
+            # share a transport
+            tran = ssh.get_transport()
 
-        # wait for container to start
-        for _ in range(1200):
-            rc, _ = _do_ssh('docker inspect {name}'.format(**locals()))
-            if rc == 0:
-                break
-            time.sleep(1)
-        else:
-            raise RuntimeError('container failed to start on host')
+            def _do_ssh(cmd):
+                chan = tran.open_session()
+                # get a pty so stdout/stderr look right
+                chan.get_pty()
+                out = chan.makefile()
+                chan.exec_command(cmd)
+                output = out.read()
+                rc = chan.recv_exit_status()
+                return rc, output
 
-        # wait for container to complete
-        for _ in range(1200):
+            # wait for container to launch
+            # we loop indefinitely here, as we have no idea how long the docker pull will take
+            while True:
+                rc, _ = _do_ssh('docker inspect {name}'.format(**locals()))
+                if rc == 0:
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError('failed to create container')
+
+            # wait for container to start
+            for _ in range(2):
+                _rc, _output = _do_ssh('docker inspect {name}'.format(**locals()))
+                if _rc != 0:
+                    raise RuntimeError('failed to inspect container')
+                _container = json.loads(_output)
+                started_at = _container[0]["State"]["StartedAt"]
+                if not started_at.startswith('0001'):
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError('container failed to start')
+
+            # wait for container to complete
+            for _ in range(1200):
+                _rc, _output = _do_ssh('docker inspect {name}'.format(**locals()))
+                if _rc != 0:
+                    raise RuntimeError('failed to inspect container')
+                _container = json.loads(_output)
+                finished_at = _container[0]["State"]["FinishedAt"]
+                if not finished_at.startswith('0001'):
+                    break
+                time.sleep(1)
+            else:
+                raise RuntimeError('container timed out')
+
+            # gather container output
+            _rc, output = _do_ssh('docker logs {name}'.format(**locals()))
+            if _rc != 0:
+                raise RuntimeError('could not attach to container')
+
+            # determine container exit code
             _rc, _output = _do_ssh('docker inspect {name}'.format(**locals()))
             if _rc != 0:
-                raise RuntimeError('failed to inspect container')
-            _container = json.loads(_output)
-            finished_at = _container[0]["State"]["FinishedAt"]
-            if not finished_at.startswith('0001'):
-                break
-            time.sleep(1)
-        else:
-            raise RuntimeError('container timed out')
+                raise RuntimeError('could not determine exit code')
+            container = json.loads(_output)
+            rc = container[0]["State"]["ExitCode"]
 
-        # gather container output
-        _rc, output = _do_ssh('docker logs {name}'.format(**locals()))
-        if _rc != 0:
-            raise RuntimeError('could not attach to container')
-
-        # determine container exit code
-        _rc, _output = _do_ssh('docker inspect {name}'.format(**locals()))
-        if _rc != 0:
-            raise RuntimeError('could not determine exit code')
-        container = json.loads(_output)
-        rc = container[0]["State"]["ExitCode"]
-
-        # cleanup
-        self._destroy_container(name)
-        self._wait_for_destroy(name)
+        finally:
+            # cleanup
+            self._destroy_container(name)
+            self._wait_for_destroy(name)
 
         # return rc and output
         return rc, output
+
+    def state(self, name):
+        systemdActiveStateMap = {
+            "active": "up",
+            "reloading": "down",
+            "inactive": "created",
+            "failed": "crashed",
+            "activating": "down",
+            "deactivating": "down",
+        }
+        try:
+            # NOTE (bacongobbler): this call to ._get_unit() acts as a pre-emptive check to
+            # determine if the job no longer exists (will raise a RuntimeError on 404)
+            self._get_unit(name)
+            state = self._wait_for_container_state(name)
+            activeState = state['systemdActiveState']
+            # FIXME (bacongobbler): when fleet loads a job, sometimes it'll automatically start and
+            # stop the container, which in our case will return as 'failed', even though
+            # the container is perfectly fine.
+            if activeState == 'failed':
+                if state['systemdLoadState'] == 'loaded':
+                    return JobState.created
+            return getattr(JobState, systemdActiveStateMap[activeState])
+        except KeyError:
+            # failed retrieving a proper response from the fleet API
+            return JobState.error
+        except RuntimeError:
+            # failed to retrieve a response from the fleet API,
+            # which means it does not exist
+            return JobState.destroyed
 
     def attach(self, name):
         """
@@ -311,8 +372,10 @@ CONTAINER_TEMPLATE = [
     {"section": "Service", "name": "ExecStartPre", "value": '''/bin/sh -c "IMAGE=$(etcdctl get /deis/registry/host 2>&1):$(etcdctl get /deis/registry/port 2>&1)/{image}; docker pull $IMAGE"'''},  # noqa
     {"section": "Service", "name": "ExecStartPre", "value": '''/bin/sh -c "docker inspect {name} >/dev/null 2>&1 && docker rm -f {name} || true"'''},  # noqa
     {"section": "Service", "name": "ExecStart", "value": '''/bin/sh -c "IMAGE=$(etcdctl get /deis/registry/host 2>&1):$(etcdctl get /deis/registry/port 2>&1)/{image}; port=$(docker inspect -f '{{{{range $k, $v := .ContainerConfig.ExposedPorts }}}}{{{{$k}}}}{{{{end}}}}' $IMAGE | cut -d/ -f1) ; docker run --name {name} {memory} {cpu} {hostname} -P -e PORT=$port $IMAGE {command}"'''},  # noqa
+    {"section": "Service", "name": "ExecStop", "value": '''/usr/bin/docker stop {name}'''},
     {"section": "Service", "name": "ExecStop", "value": '''/usr/bin/docker rm -f {name}'''},
     {"section": "Service", "name": "TimeoutStartSec", "value": "20m"},
+    {"section": "Service", "name": "TimeoutStopSec", "value": "10"},
     {"section": "Service", "name": "RestartSec", "value": "5"},
     {"section": "Service", "name": "Restart", "value": "on-failure"},
 ]

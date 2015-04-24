@@ -1,19 +1,25 @@
 include ../includes.mk
 
-DOCKER_IMAGE := deis/publisher
-BUILD_IMAGE := $(DOCKER_IMAGE)-build
+# the filepath to this repository, relative to $GOPATH/src
+repo_path = github.com/deis/deis/publisher
+
+GO_FILES = main.go
+GO_PACKAGES = server
+GO_PACKAGES_REPO_PATH = $(addprefix $(repo_path)/,$(GO_PACKAGES))
+
+COMPONENT = $(notdir $(repo_path))
+DOCKER_IMAGE := $(IMAGE_PREFIX)$(COMPONENT)
 RELEASE_IMAGE := $(DOCKER_IMAGE):$(BUILD_TAG)
 REMOTE_IMAGE := $(REGISTRY)/$(RELEASE_IMAGE)
+BINARY_DEST_DIR = image/bin
 
 build: check-docker
-	cp -pR ../Godeps .
-	docker build -t $(BUILD_IMAGE) .
-	docker cp `docker run -d $(BUILD_IMAGE)`:/go/bin/publisher image/
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 godep go build -a -installsuffix cgo -ldflags '-s' -o $(BINARY_DEST_DIR)/publisher github.com/deis/deis/publisher || exit 1
+	$(call check-static-binary,$(BINARY_DEST_DIR)/publisher)
 	docker build -t $(RELEASE_IMAGE) image
-	rm -rf image/publisher
 
 clean: check-docker check-registry
-	rm -rf Godeps
+	rm -rf $(BINARY_DEST_DIR)
 	docker rmi $(RELEASE_IMAGE) $(REMOTE_IMAGE)
 
 full-clean: check-docker check-registry
@@ -26,7 +32,7 @@ install: check-deisctl
 dev-release: push set-image
 
 push: check-registry
-	docker tag $(RELEASE_IMAGE) $(REMOTE_IMAGE)
+	docker tag -f $(RELEASE_IMAGE) $(REMOTE_IMAGE)
 	docker push $(REMOTE_IMAGE)
 
 set-image: check-deisctl
@@ -47,10 +53,17 @@ start: check-deisctl
 stop: check-deisctl
 	deisctl stop publisher
 
-test: test-unit
+test: test-style test-unit test-functional
 
 test-functional:
 	@echo no functional tests
+
+test-style:
+# display output, then check
+	$(GOFMT) $(GO_PACKAGES) $(GO_FILES)
+	@$(GOFMT) $(GO_PACKAGES) $(GO_FILES) | read; if [ $$? == 0 ]; then echo "gofmt check failed."; exit 1; fi
+	$(GOVET) $(repo_path) $(GO_PACKAGES_REPO_PATH)
+	$(GOLINT) ./...
 
 test-unit:
 	godep go test -v ./...

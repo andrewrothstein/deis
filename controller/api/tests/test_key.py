@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Unit tests for the Deis api app.
 
@@ -25,10 +26,29 @@ RSA_PUBKEY = (
     "sgBMP81VfYTfYChAyJpKp2yoP autotest@autotesting comment"
 )
 
+RSA_PUBKEY2 = (
+    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC4xELdubosJ2/bQuiSUyWclVVa71pXpmq"
+    "aXTwfau/XFLgD5yE+TOFbVT22xvEr4AwZqS9w0TBMp4RLfi4pTdjoIK+lau2lDMuEpbF4xg"
+    "PWAveAqKuLcKJbJrZQdo5VWn5//7+M1RHQCPqjeN2iS9I3C8yiPg3mMPT2mKuyZYB9VD3hK"
+    "mhT4xRAsS6vfKZr7CmFHgAmRBqdaU1RetR5nfTj0R5yyAv7Z2BkE8UhUAseFZ0djBs6kzjs"
+    "5ddgM4Gv2Zajs7qVvpVPzZpq3vFB16Q5TMj2YtoYF6UZFFf4u/4KAW8xfYJAFdpNsvh279s"
+    "dJS08nTeElUg6pn83A3hqWX+J testing"
+)
+
 ECDSA_PUBKEY = (
     "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAAB"
     "BBCGB0x9lmubbLJTF5NekCI0Cgjyip6jJh/t/qQQi1LAZisbREBJ8Wy+hwSn3tnbf/Imh9X"
     "+MQnrrza0jaQ3QUAQ= autotest@autotesting comment"
+)
+
+ECDSA_PUBKEY2 = (
+    "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAAB"
+    "BBK6Vbpuk4DjPtIcPUw0L2j1ahuRMItM5IZzi0kU0xCNVSSFtF21yEqLMOzdJOQYKCgaGzl"
+    "pSPf7VWhYbJ753csQ= testing"
+)
+
+BAD_KEY = (
+    "ssh-rsa foo_bar"
 )
 
 
@@ -63,13 +83,28 @@ class KeyTest(TestCase):
         response = self.client.delete(url, HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 204)
 
+    def _check_bad_key(self, pubkey):
+        """
+        Test that a user cannot add invalid SSH public keys
+        """
+        url = '/v1/keys'
+        body = {'id': 'mykey@box.local', 'public': pubkey}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 400)
+        return response
+
     def test_rsa_key(self):
         self._check_key(RSA_PUBKEY)
 
     def test_ecdsa_key(self):
         self._check_key(ECDSA_PUBKEY)
 
-    def _check_duplicate_key(self, pubkey):
+    def test_bad_key(self):
+        response = self._check_bad_key(BAD_KEY)
+        self.assertEqual(response.data, {'public': ['Incorrect padding']})
+
+    def _check_duplicate_key(self, pubkey, pubkey2):
         """
         Test that a user cannot add a duplicate key
         """
@@ -81,12 +116,21 @@ class KeyTest(TestCase):
         response = self.client.post(url, json.dumps(body), content_type='application/json',
                                     HTTP_AUTHORIZATION='token {}'.format(self.token))
         self.assertEqual(response.status_code, 400)
+        # test that adding a key with the same fingerprint fails
+        body = {'id': 'mykey2@box.local', 'public': pubkey}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 400)
+        body = {'id': 'mykey2@box.local', 'public': pubkey2}
+        response = self.client.post(url, json.dumps(body), content_type='application/json',
+                                    HTTP_AUTHORIZATION='token {}'.format(self.token))
+        self.assertEqual(response.status_code, 201)
 
     def test_rsa_duplicate_key(self):
-        self._check_duplicate_key(RSA_PUBKEY)
+        self._check_duplicate_key(RSA_PUBKEY, RSA_PUBKEY2)
 
     def test_ecdsa_duplicate_key(self):
-        self._check_duplicate_key(ECDSA_PUBKEY)
+        self._check_duplicate_key(ECDSA_PUBKEY, ECDSA_PUBKEY2)
 
     def test_rsa_key_str(self):
         """Test the text representation of a key"""

@@ -50,6 +50,14 @@ echo "HOST_IPADDR=$HOST_IPADDR"
 export DEV_REGISTRY=${DEV_REGISTRY?}
 echo "DEV_REGISTRY=$DEV_REGISTRY"
 
+# random 10-char (5-byte) hex string to identify a test run
+export DEIS_TEST_ID=${DEIS_TEST_ID:-$(openssl rand -hex 5)}
+echo "DEIS_TEST_ID=$DEIS_TEST_ID"
+
+# give this session a unique ~/.deis/<client>.json file
+export DEIS_PROFILE=test-$DEIS_TEST_ID
+rm -f $HOME/.deis/test-$DEIS_TEST_ID.json
+
 # bail if registry is not accessible
 if ! curl -s $DEV_REGISTRY; then
   echo "DEV_REGISTRY is not accessible, exiting..."
@@ -67,20 +75,15 @@ go get -v github.com/tools/godep
 # cleanup any stale example applications
 rm -rf $DEIS_ROOT/tests/example-*
 
-# generate ssh key if it doesn't already exist
+# generate ssh keys if they don't already exist
 test -e ~/.ssh/$DEIS_TEST_AUTH_KEY || ssh-keygen -t rsa -f ~/.ssh/$DEIS_TEST_AUTH_KEY -N ''
+# TODO: parameterize this key required for keys_test.go?
+test -e ~/.ssh/deiskey || ssh-keygen -q -t rsa -f ~/.ssh/deiskey -N '' -C deiskey
 
 # prepare the SSH agent
 ssh-add -D || eval $(ssh-agent) && ssh-add -D
 ssh-add ~/.ssh/$DEIS_TEST_AUTH_KEY
 ssh-add $DEIS_TEST_SSH_KEY
-
-# clean out deis session data
-rm -rf ~/.deis
-
-# clean out vagrant environment
-$THIS_DIR/halt-all-vagrants.sh
-vagrant destroy --force
 
 # wipe out all vagrants & deis virtualboxen
 function cleanup {
@@ -102,14 +105,11 @@ function dump_logs {
   export FLEETCTL_TUNNEL=$DEISCTL_TUNNEL
   fleetctl -strict-host-key-checking=false list-units
   # application unit logs
-  get_logs appssample_v2.web.1
-  get_logs appssample_v2.run.1
-  get_logs buildsample_v2.web.1
-  get_logs buildsample_v3.cmd.1
-  get_logs deispullsample_v2.cmd.1
-  get_logs deispullsample_v2.worker.1
-  get_logs pssample_v2.worker.1
-  get_logs pssample_v2.worker.2
+  for APP in `fleetctl -strict-host-key-checking=false list-units --no-legend --fields=unit | grep -v "deis-"`;do
+    CURRENT_APP=$(echo $APP | sed "s/\.service//")
+    #echo "$CURRENT_APP"
+    get_journal_logs $CURRENT_APP
+  done
   # etcd keyspace
   get_logs deis-controller "etcdctl ls / --recursive" etcdctl-dump
   # component logs
@@ -135,6 +135,14 @@ function dump_logs {
   get_logs deis-router@3 deis-store-metadata deis-store-metadata-3
   get_logs deis-router@3 deis-store-volume deis-store-volume-3
   get_logs deis-store-gateway
+
+  # get debug-etcd logs
+  fleetctl -strict-host-key-checking=false ssh deis-router@1 journalctl --no-pager -u etcd \
+    > $FAILED_LOGS_DIR/debug-etcd-1.log
+  fleetctl -strict-host-key-checking=false ssh deis-router@2 journalctl --no-pager -u etcd \
+    > $FAILED_LOGS_DIR/debug-etcd-2.log
+  fleetctl -strict-host-key-checking=false ssh deis-router@3 journalctl --no-pager -u etcd \
+    > $FAILED_LOGS_DIR/debug-etcd-3.log
 
   # tarball logs
   BUCKET=jenkins-failure-logs
@@ -163,4 +171,9 @@ function get_logs {
     FILENAME=$TARGET
   fi
   fleetctl -strict-host-key-checking=false ssh "$TARGET" docker logs "$CONTAINER" > $FAILED_LOGS_DIR/$FILENAME.log
+}
+
+function get_journal_logs {
+  TARGET="$1"
+  fleetctl -strict-host-key-checking=false journal --lines=1000 "$TARGET" > $FAILED_LOGS_DIR/$TARGET.log
 }

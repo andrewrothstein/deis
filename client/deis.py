@@ -20,9 +20,12 @@ Subcommands, use ``deis help [subcommand]`` to learn more::
   limits        manage resource limits for your application
   tags          manage tags for application containers
   releases      manage releases of an application
+  certs         manage SSL endpoints for an app
 
   keys          manage ssh keys used for `git push` deployments
   perms         manage permissions for applications
+  git           manage git for applications
+  users         manage users
 
 Shortcut commands, use ``deis shortcuts`` to see all::
 
@@ -47,7 +50,7 @@ from getpass import getpass
 from itertools import cycle
 from threading import Event
 from threading import Thread
-import base64
+from base64 import b64encode
 import glob
 import json
 import locale
@@ -67,15 +70,18 @@ from dateutil import tz
 from docopt import docopt
 from docopt import DocoptExit
 import requests
+from tabulate import tabulate
 from termcolor import colored
+import urllib3.contrib.pyopenssl
 
-__version__ = '1.3.0-dev'
+__version__ = '1.6.0-dev'
 
 # what version of the API is this client compatible with?
-__api_version__ = '1.1'
+__api_version__ = '1.3'
 
 
 locale.setlocale(locale.LC_ALL, '')
+urllib3.contrib.pyopenssl.inject_into_urllib3()
 
 
 class Session(requests.Session):
@@ -172,20 +178,10 @@ class Settings(dict):
         # Create the $HOME/.deis dir if it doesn't exist
         if not os.path.isdir(path):
             os.mkdir(path, 0700)
-        self._path = os.path.join(path, 'client.json')
+        filename = '%s.json' % os.environ.get('DEIS_PROFILE', 'client')
+        self._path = os.path.join(path, filename)
         if not os.path.exists(self._path):
             settings = {}
-            # try once to convert the old settings file if it exists
-            # FIXME: this code can be removed in November 2014 or thereabouts, that's long enough.
-            old_path = os.path.join(path, 'client.yaml')
-            if os.path.exists(old_path):
-                try:
-                    with open(old_path, 'r') as f:
-                        txt = f.read().replace('{', '{"', 1).replace(':', '":', 1).replace("'", '"')
-                        settings = json.loads(txt)
-                        os.remove(old_path)
-                except:
-                    pass  # ignore errors, at least we tried to convert it
             with open(self._path, 'w') as f:
                 json.dump(settings, f)
         # load initial settings
@@ -310,8 +306,10 @@ def readable_datetime(datetime_str):
     dt = parser.parse(datetime_str).astimezone(timezone)
     now = datetime.now(timezone)
     delta = relativedelta.relativedelta(now, dt)
+    yesterday = now - relativedelta.relativedelta(days=1)
+
     # if it happened today, say "2 hours and 1 minute ago"
-    if delta.days <= 1 and dt.day == now.day:
+    if dt > yesterday:
         if delta.hours == 0:
             hour_str = ''
         elif delta.hours == 1:
@@ -328,13 +326,13 @@ def readable_datetime(datetime_str):
             return 'Just now'
         else:
             return "{}{}ago".format(hour_str, min_str)
+
     # if it happened yesterday, say "yesterday at 3:23 pm"
-    yesterday = now + relativedelta.relativedelta(days=-1)
-    if delta.days <= 2 and dt.day == yesterday.day:
+    elif yesterday.year == dt.year and yesterday.month == dt.month and yesterday.day == dt.day:
         return dt.strftime("Yesterday at %X")
+
     # otherwise return locale-specific date/time format
-    else:
-        return dt.strftime('%c %Z')
+    return dt.strftime('%c %Z')
 
 
 def trim(docstring):
@@ -383,6 +381,34 @@ class DeisClient(object):
         self._settings = Settings()
         self._logger = logging.getLogger(__name__)
 
+    def check_connection(self, controller, ssl_verify):
+        url = urlparse.urljoin(controller, '/v1/')
+        error_message = """
+{} does not appear to be a valid Deis controller.
+Make sure that the Controller URI is correct and the server is running.
+""".format(controller)
+
+        try:
+            response = self._session.get(url, allow_redirects=False,
+                                         verify=ssl_verify)
+        except requests.exceptions.ConnectionError as err:
+            raise EnvironmentError(error_message + "\nSpecific Error: " + str(err.message))
+
+        if response.status_code != 401:
+            raise EnvironmentError(error_message)
+        self.check_api_version(response.headers.get('X_DEIS_API_VERSION'))
+
+    def check_api_version(self, server_api_version):
+        """
+        Check if the client is compatable with the api
+        """
+        if server_api_version is not None and server_api_version != __api_version__:
+            self._logger.warning("""
+  !    WARNING: Client and server API versions do not match. Please consider upgrading.
+  !    Client version: {}
+  !    Server version: {}
+""".format(__api_version__, server_api_version))
+
     def _dispatch(self, method, path, body=None, **kwargs):
         """
         Dispatch an API request to the active Deis controller
@@ -390,6 +416,7 @@ class DeisClient(object):
         func = getattr(self._session, method.lower())
         controller = self._settings.get('controller')
         token = self._settings.get('token')
+        ssl_verify = self._settings.get('ssl_verify')
         if not token:
             raise EnvironmentError(
                 'Could not find token. Use `deis login` or `deis register` to get started.')
@@ -399,15 +426,9 @@ class DeisClient(object):
             'X-Deis-Version': __api_version__.rsplit('.', 1)[0],
             'Authorization': 'token {}'.format(token)
         }
-        response = func(url, data=body, headers=headers)
+        response = func(url, data=body, headers=headers, verify=ssl_verify)
         # check for version mismatch
-        server_api_version = response.headers.get('X_DEIS_API_VERSION')
-        if server_api_version is not None and server_api_version != __api_version__:
-            self._logger.warning("""
- !    WARNING: Client and server API versions do not match. Please consider upgrading.
- !    Client version: {}
- !    Server version: {}
-""".format(__api_version__, server_api_version))
+        self.check_api_version(response.headers.get('X_DEIS_API_VERSION'))
         return response
 
     def apps(self, args):
@@ -447,6 +468,9 @@ class DeisClient(object):
 
           -b --buildpack BUILDPACK
             a buildpack url to use for this app
+
+          -r --remote REMOTE
+            name of remote to create. [default: deis]
         """
         body = {}
         app_name = None
@@ -478,24 +502,12 @@ class DeisClient(object):
         if buildpack:
             self._config_set(app_id, {'BUILDPACK_URL': buildpack})
 
-        # set a git remote if necessary
-        try:
-            self._session.git_root()
-        except EnvironmentError:
-            return
-        hostname = urlparse.urlparse(self._settings['controller']).netloc.split(':')[0]
-        git_remote = "ssh://git@{hostname}:2222/{app_id}.git".format(**locals())
         if args.get('--no-remote'):
+            hostname = urlparse.urlparse(self._settings['controller']).netloc.split(':')[0]
+            git_remote = "ssh://git@{hostname}:2222/{app_id}.git".format(**locals())
             self._logger.info('remote available at {}'.format(git_remote))
         else:
-            try:
-                subprocess.check_call(
-                    ['git', 'remote', 'add', '-f', 'deis', git_remote],
-                    stdout=subprocess.PIPE)
-                self._logger.info('Git remote deis added')
-            except subprocess.CalledProcessError:
-                self._logger.error('Could not create Deis remote')
-                sys.exit(1)
+            self._git_remote_create(app_id, args.get('--remote'))
 
     def apps_destroy(self, args):
         """
@@ -538,8 +550,7 @@ class DeisClient(object):
         finally:
             progress.cancel()
             progress.join()
-        if response.status_code in (requests.codes.no_content,
-                                    requests.codes.not_found):
+        if response.status_code == requests.codes.no_content:
             self._logger.info('done in {}s'.format(int(time.time() - before)))
             try:
                 # If the requested app is a heroku app and the app
@@ -624,12 +635,20 @@ class DeisClient(object):
         Options:
           -a --app=<app>
             the uniquely identifiable name for the application.
+          -n --lines=<lines>
+            the number of lines to display
         """
         app = args.get('--app')
         if not app:
             app = self._session.app
-        response = self._dispatch('get',
-                                  "/v1/apps/{}/logs".format(app))
+
+        url = "/v1/apps/{}/logs".format(app)
+
+        log_lines = args.get('--lines')
+        if log_lines:
+            url += "?log_lines={}".format(log_lines)
+
+        response = self._dispatch('get', url)
         if response.status_code == requests.codes.ok:
             # strip the last newline character
             for line in response.json().split('\n')[:-1]:
@@ -638,6 +657,7 @@ class DeisClient(object):
                     log_tag = line.split(': ')[0].split(' ')[1]
                     # colorize the log based on the tag
                     color = sum([ord(ch) for ch in log_tag]) % 6
+
                     def f(x):
                         return {
                             0: 'green',
@@ -718,10 +738,19 @@ class DeisClient(object):
             provide a password for the new account.
           --email=<email>
             provide an email address.
+          --ssl-verify=false
+            disables SSL certificate verification for API requests
         """
         controller = args['<controller>']
+        ssl_verify = True
+        ssl_option = args.get('--ssl-verify')
+        if ssl_option == 'false':
+            ssl_verify = False
         if not urlparse.urlparse(controller).scheme:
             controller = "http://{}".format(controller)
+
+        self.check_connection(controller, ssl_verify)
+
         username = args.get('--username')
         if not username:
             username = raw_input('username: ')
@@ -737,7 +766,14 @@ class DeisClient(object):
             email = raw_input('email: ')
         url = urlparse.urljoin(controller, '/v1/auth/register')
         payload = {'username': username, 'password': password, 'email': email}
-        response = self._session.post(url, data=payload, allow_redirects=False)
+        headers = {}
+
+        token = self._settings.get('token')
+        if token:
+            headers.update({'Authorization': 'token {}'.format(token)})
+
+        response = self._session.post(url, data=payload, allow_redirects=False,
+                                      verify=ssl_verify, headers=headers)
         if response.status_code == requests.codes.created:
             self._settings['controller'] = controller
             self._settings.save()
@@ -755,22 +791,38 @@ class DeisClient(object):
         """
         Cancels and removes the current account.
 
-        Usage: deis auth:cancel
+        Usage: deis auth:cancel [options]
+
+        Options:
+          --username=<username>
+            provide a username for the account.
+          --password=<password>
+            provide a password for the account.
+          --yes
+            force "yes" when prompted.
         """
         controller = self._settings.get('controller')
         if not controller:
             self._logger.error('Not logged in to a Deis controller')
             sys.exit(1)
         self._logger.info('Please log in again in order to cancel this account')
-        username = self.auth_login({'<controller>': controller})
+        args['<controller>'] = controller
+        username = self.auth_login(args)
         if username:
-            confirm = raw_input("Cancel account \"{}\" at {}? (y/n) ".format(username, controller))
-            if confirm == 'y':
-                self._dispatch('delete', '/v1/auth/cancel')
-                self._settings['controller'] = None
-                self._settings['token'] = None
-                self._settings.save()
-                self._logger.info('Account cancelled')
+            confirm = args.get('--yes')
+            if not confirm:
+                confirm = raw_input(
+                    "Cancel account \"{}\" at {}? (y/N) ".format(username, controller))
+            if confirm in ['y', True]:
+                response = self._dispatch('delete', '/v1/auth/cancel')
+                if response.status_code == requests.codes.no_content:
+                    self._settings['controller'] = None
+                    self._settings['token'] = None
+                    self._settings.save()
+                    self._logger.info('Account cancelled')
+                else:
+                    self._logger.info('Account not changed')
+                    raise ResponseError(response)
             else:
                 self._logger.info('Account not changed')
 
@@ -789,12 +841,20 @@ class DeisClient(object):
             provide a username for the account.
           --password=<password>
             provide a password for the account.
+          --ssl-verify=false
+            disables SSL certificate verification for API requests
         """
         controller = args['<controller>']
+        ssl_verify = True
+        ssl_option = args.get('--ssl-verify')
+        if ssl_option == 'false':
+            ssl_verify = False
         if not urlparse.urlparse(controller).scheme:
             controller = "http://{}".format(controller)
+
+        self.check_connection(controller, ssl_verify)
+
         username = args.get('--username')
-        headers = {}
         if not username:
             username = raw_input('username: ')
         password = args.get('--password')
@@ -803,12 +863,14 @@ class DeisClient(object):
         url = urlparse.urljoin(controller, '/v1/auth/login/')
         payload = {'username': username, 'password': password}
         # post credentials to the login URL
-        response = self._session.post(url, data=payload, allow_redirects=False)
+        response = self._session.post(url, data=payload, allow_redirects=False,
+                                      verify=ssl_verify)
         if response.status_code == requests.codes.ok:
             # retrieve and save the API token for future requests
             self._settings['controller'] = controller
             self._settings['username'] = username
             self._settings['token'] = response.json()['token']
+            self._settings['ssl_verify'] = ssl_verify
             self._settings.save()
             self._logger.info("Logged in as {}".format(username))
             return username
@@ -821,9 +883,8 @@ class DeisClient(object):
 
         Usage: deis auth:logout
         """
-        self._settings['controller'] = None
-        self._settings['username'] = None
-        self._settings['token'] = None
+        for i in ['controller', 'username', 'token', 'ssl_verify']:
+            self._settings[i] = None
         self._settings.save()
         self._logger.info('Logged out')
 
@@ -869,7 +930,8 @@ class DeisClient(object):
         """
         user = self._settings.get('username')
         if user:
-            self._logger.info(user)
+            self._logger.info(
+                'You are {} at {}'.format(user, self._settings['controller']))
         else:
             self._logger.info(
                 'Not logged in. Use `deis login` or `deis register` to get started.')
@@ -962,6 +1024,94 @@ class DeisClient(object):
         else:
             raise ResponseError(response)
 
+    def certs(self, args):
+        """
+        Valid commands for certs:
+
+        certs:list            list SSL certificates for an app
+        certs:add             add an SSL certificate to an app
+        certs:update          update an existing certifcate for an app
+        certs:remove          remove an SSL certificate from an app
+
+        Use `deis help [command]` to learn more.
+        """
+        sys.argv[1] = 'certs:list'
+        args = docopt(self.certs_list.__doc__)
+        return self.certs_list(args)
+
+    def certs_add(self, args):
+        """
+        Binds a certificate/key pair to an application.
+
+        Usage: deis certs:add <cert> <key>
+
+        Arguments:
+          <cert>
+            The public key of the SSL certificate.
+          <key>
+            The private key of the SSL certificate.
+        """
+        cert = args.get('<cert>')
+        key = args.get('<key>')
+        body = {'certificate': file(cert).read().strip(), 'key': file(key).read().strip()}
+        sys.stdout.write("Adding SSL endpoint... ")
+        sys.stdout.flush()
+        try:
+            progress = TextProgress()
+            progress.start()
+            response = self._dispatch('post', "/v1/certs", json.dumps(body))
+        finally:
+            progress.cancel()
+            progress.join()
+        if response.status_code == requests.codes.created:
+            self._logger.info("done")
+            data = response.json()
+            self._logger.info("{common_name}".format(**data))
+        else:
+            raise ResponseError(response)
+
+    def certs_list(self, args):
+        """
+        Show certificate information for an SSL application.
+
+        Usage: deis certs:list
+        """
+        response = self._dispatch('get', "/v1/certs")
+        if response.status_code == requests.codes.ok:
+            data = response.json()
+            table = [['Common Name', 'Expires']]
+            if len(data['results']) == 0:
+                self._logger.info('No certs')
+                return
+            for item in data['results']:
+                # strip unused fields
+                for field in item.keys():
+                    if field not in ['common_name', 'expires']:
+                        del item[field]
+                table += [[item['common_name'], item['expires']]]
+            self._logger.info(tabulate(table, headers='firstrow'))
+        else:
+            raise ResponseError(response)
+
+    def certs_remove(self, args):
+        """
+        removes a certificate/key pair from the application.
+
+        Usage: deis certs:remove <cn> [options]
+
+        Arguments:
+          <cn>
+            the common name of the cert to remove from the app.
+        """
+        cn = args.get('<cn>')
+        sys.stdout.write("Removing {}... ".format(cn))
+        sys.stdout.flush()
+        response = self._dispatch('delete', "/v1/certs/{}".format(cn))
+        if response.status_code == requests.codes.no_content:
+            self._logger.info('Done.')
+        else:
+            raise ResponseError(response)
+
     def config(self, args):
         """
         Valid commands for config:
@@ -970,6 +1120,7 @@ class DeisClient(object):
         config:set         set environment variables for an app
         config:unset       unset environment variables for an app
         config:pull        extract environment variables to .env
+        config:push        set environment variables from .env
 
         Use `deis help [command]` to learn more.
         """
@@ -999,7 +1150,9 @@ class DeisClient(object):
         if response.status_code == requests.codes.ok:
             config = response.json()
             values = config['values']
-            self._logger.info("=== {} Config".format(app))
+            if not oneline:
+                self._logger.info("=== {} Config".format(app))
+
             items = values.items()
             if len(items) == 0:
                 self._logger.info('No configuration')
@@ -1039,7 +1192,20 @@ class DeisClient(object):
         app = args.get('--app')
         if not app:
             app = self._session.app
+
         values = dictify(args['<var>=<value>'])
+        if values.get('SSH_KEY'):
+            if os.path.isfile(values.get('SSH_KEY')):
+                with open(values.get('SSH_KEY')) as f:
+                    ssh_key = f.read()
+            else:
+                ssh_key = values['SSH_KEY']
+            match = re.match(r'^-.+ .SA PRIVATE KEY-*', ssh_key)
+            if match:
+                values['SSH_KEY'] = b64encode(ssh_key)
+            else:
+                self._logger.error("Could not parse SSH private key {}".format(ssh_key))
+                sys.exit(1)
         self._config_set(app, values)
 
     def _config_set(self, app, values):
@@ -1168,6 +1334,33 @@ class DeisClient(object):
         else:
             raise ResponseError(response)
 
+    def config_push(self, args):
+        """
+        Sets environment variables for an application.
+
+        The environment is read from <path>. This file can be read by foreman
+        to load the local environment for your app.
+
+        Usage: deis config:push [options]
+
+        Options:
+          -a --app=<app>
+            the uniquely identifiable name for the application.
+          -p <path>, --path=<path>
+            a path leading to an environment file [default: .env]
+        """
+        app = args.get('--app')
+        if not app:
+            app = self._session.app
+
+        # read from .env
+        try:
+            with open(args.get('--path'), 'r') as f:
+                self._config_set(app, dictify([line.strip() for line in f]))
+        except IOError:
+            self._logger.error('could not read env from ' + args.get('--path'))
+            sys.exit(1)
+
     def domains(self, args):
         """
         Valid commands for domains:
@@ -1274,6 +1467,58 @@ class DeisClient(object):
                 self._logger.info(domain['domain'])
         else:
             raise ResponseError(response)
+
+    def git(self, args):
+        """
+        Valid commands for git:
+
+        git:remote          Adds git remote of application to repository
+
+        Use `deis help [command]` to learn more.
+        """
+        raise DocoptExit('`deis git` is not a valid command, try `deis help git`')
+
+    def git_remote(self, args):
+        """
+        Adds git remote of application to repository
+
+        Usage: deis git:remote [options]
+
+        Options:
+          -a --app=<app>
+            the uniquely identifiable name for the application.
+
+          -r --remote REMOTE
+            name of remote to create. [default: deis]
+        """
+        app = args.get('--app')
+        if not app:
+            app = self._session.app
+        response = self._dispatch(
+            'get', "/v1/apps/{app}/domains".format(app=app))
+        if response.status_code == requests.codes.ok:
+            self._git_remote_create(app, args.get('--remote'))
+        else:
+            raise ResponseError(response)
+
+    def _git_remote_create(self, app, remote_name):
+        """
+        Adds a git_remote to the current repository. Sets up a git root if necessary.
+        """
+        hostname = urlparse.urlparse(self._settings['controller']).netloc.split(':')[0]
+        git_remote = "ssh://git@{hostname}:2222/{app}.git".format(**locals())
+        try:
+            self._session.git_root()
+        except EnvironmentError:
+            return
+        try:
+            subprocess.check_call(
+                ['git', 'remote', 'add', remote_name, git_remote],
+                stdout=subprocess.PIPE)
+            self._logger.info('Git remote {} added'.format(remote_name))
+        except subprocess.CalledProcessError:
+            self._logger.error('Could not create Deis remote')
+            sys.exit(1)
 
     def limits(self, args):
         """
@@ -1554,8 +1799,9 @@ class DeisClient(object):
         """
         Sets tags for an application.
 
-        A tag is a key/value pair used to tag an application's containers and is passed to the scheduler.
-        This is often used to restrict workloads to specific hosts matching the scheduler-configured metadata.
+        A tag is a key/value pair used to tag an application's containers and is passed to the
+        scheduler. This is often used to restrict workloads to specific hosts matching the
+        scheduler-configured metadata.
 
         Usage: deis tags:set [options] <key>=<value>...
 
@@ -1999,6 +2245,35 @@ class DeisClient(object):
                 self._logger.info("{:<10} -> {}".format(shortcut, command))
         self._logger.info('\nUse `deis help [command]` to learn more')
 
+    def users(self, args):
+        """
+        Valid commands for users:
+
+        users:list        list all registered users
+
+        Use `deis help [command]` to learn more.
+        """
+        sys.argv[1] = 'users:list'
+        args = docopt(self.users_list.__doc__)
+        return self.users_list(args)
+
+    def users_list(self, args):
+        """
+        Lists all registered users.
+        Requires admin privilages.
+
+        Usage: deis users:list
+        """
+        response = self._dispatch('get', '/v1/users/')
+        if response.status_code == requests.codes.ok:
+            data = response.json()
+            self._logger.info('=== Users')
+            for item in data['results']:
+                self._logger.info('{username}'.format(**item))
+        else:
+            raise ResponseError(response)
+
+
 SHORTCUTS = OrderedDict([
     ('create', 'apps:create'),
     ('destroy', 'apps:destroy'),
@@ -2101,7 +2376,17 @@ def main():
     if hasattr(cli, cmd):
         method = getattr(cli, cmd)
     else:
-        raise DocoptExit('Found no matching command, try `deis help`')
+        # split by : to execute the proper command
+        split_cmd = args['<command>'].split(':')
+        dash_separated_command = 'deis-{}'.format(split_cmd[0])
+        arglist = args['<args>']
+        if len(split_cmd) > 1:
+            # safety precaution in case users want to use more than one colon in their command
+            arglist = split_cmd[1:] + arglist
+        try:
+            sys.exit(subprocess.call([dash_separated_command] + arglist))
+        except OSError:
+            raise DocoptExit('Found no matching command, try `deis help`')
     # re-parse docopt with the relevant docstring
     docstring = trim(getattr(cli, cmd).__doc__)
     if 'Usage: ' in docstring:

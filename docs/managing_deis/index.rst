@@ -15,9 +15,13 @@ Managing Deis
     backing_up_data
     configure-dns
     configure-load-balancers
+    disk_usage
     operational_tasks
     platform_logging
     platform_monitoring
+    production_deployments
+    recovering-ceph-quorum
     security_considerations
     ssl-endpoints
     upgrading-deis
+    using-a-proxy-server

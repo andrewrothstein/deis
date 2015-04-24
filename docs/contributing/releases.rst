@@ -31,9 +31,10 @@ Patch Release
     $ ./contrib/bumpver/bumpver -f A.B.C A.B.D \
         README.md \
         builder/image/Dockerfile \
-        builder/slugbuilder/Dockerfile \
-        builder/slugrunner/Dockerfile \
+        builder/image/slugbuilder/Dockerfile \
+        builder/image/slugrunner/Dockerfile \
         cache/Dockerfile \
+        cache/image/Dockerfile \
         client/deis.py \
         client/setup.py \
         contrib/coreos/user-data.example \
@@ -45,7 +46,7 @@ Patch Release
         docs/installing_deis/install-deisctl.rst \
         docs/installing_deis/install-platform.rst \
         docs/managing_deis/upgrading-deis.rst \
-        docs/reference/api-v1.1.rst \
+        docs/reference/api-v1.3.rst \
         docs/troubleshooting_deis/index.rst \
         logger/image/Dockerfile \
         logspout/image/Dockerfile \
@@ -95,11 +96,13 @@ Major or Minor Release
         docs/installing_deis/install-deisctl.rst \
         docs/installing_deis/install-platform.rst \
         docs/managing_deis/upgrading-deis.rst \
-        docs/reference/api-v1.1.rst \
+        docs/reference/api-v1.3.rst \
         docs/troubleshooting_deis/index.rst
 
   - Edit deisctl/cmd/cmd.go and change the default in the RefreshUnits usage string
     (near the bottom of the file) from ``[master]`` to ``[vA.B.D]``.
+
+  - Find and replace "A.B.D-dev" with "A.B.D" in all project Dockerfiles.
 
 - Update the CHANGELOG to include all commits since the last release
 
@@ -119,6 +122,8 @@ Major or Minor Release
 
 Any Release
 -----------
+
+- If this release includes a new component, configure `test-acceptance`_ to publish it to Docker Hub
 
 - Trigger CI jobs manually at https://ci.deis.io/, specifying the new vA.B.D tag
 
@@ -200,7 +205,8 @@ Major or Minor Release
         deisctl/deis-version \
         version/version.go
 
-  - ``git commit -a -m 'chore(release): update version in master to vA.B.D'``
+  - Find and replace "A.B.D" with "A.B.D-dev" in all project Dockerfiles.
+  - ``git commit -a -m 'chore(release): update version in master to vA.B.D-dev'``
   - ``git push origin master``
 
 - Create release notes blog post at `deis/deis.io`_ following previous formats
@@ -218,3 +224,4 @@ Major or Minor Release
 .. _`release notes`: https://github.com/deis/deis/releases
 .. _`Deis pypi`:  https://pypi.python.org/pypi/deis/
 .. _`deis/deis.io`: https://github.com/deis/deis.io
+.. _`test-acceptance`: https://ci.deis.io/job/test-acceptance/configure

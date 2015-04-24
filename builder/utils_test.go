@@ -3,10 +3,10 @@ package builder
 import (
 	"bytes"
 	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
+
 	dtime "github.com/deis/deis/pkg/time"
 )
 
@@ -28,7 +28,7 @@ func stringInSlice(list []string, s string) bool {
 	return false
 }
 
-func TestYamlToJsonGood(t *testing.T) {
+func TestYamlToJSONGood(t *testing.T) {
 	goodProcfiles := [][]byte{
 		[]byte(`web: while true; do echo hello; sleep 1; done`),
 
@@ -41,7 +41,7 @@ worker: while true; do echo hello; sleep 1; done`),
 	goodProcess := "while true; do echo hello; sleep 1; done"
 
 	for _, procfile := range goodProcfiles {
-		data, err := YamlToJson(procfile)
+		data, err := YamlToJSON(procfile)
 		if err != nil {
 			t.Errorf("expected procfile to be valid, got '%v'", err)
 		}
@@ -57,8 +57,7 @@ worker: while true; do echo hello; sleep 1; done`),
 
 func TestParseConfigGood(t *testing.T) {
 	// mock the controller response
-	resp := &http.Response{
-		Body: &ClosingBuffer{bytes.NewBufferString(`{"owner": "test",
+	resp := bytes.NewBufferString(`{"owner": "test",
 			"app": "example-go",
 			"values": {"FOO": "bar", "CAR": 1234},
 			"memory": {},
@@ -66,11 +65,9 @@ func TestParseConfigGood(t *testing.T) {
 			"tags": {},
 			"created": "2014-01-01T00:00:00UTC",
 			"updated": "2014-01-01T00:00:00UTC",
-			"uuid": "de1bf5b5-4a72-4f94-a10c-d2a3741cdf75"}`),
-		},
-	}
+			"uuid": "de1bf5b5-4a72-4f94-a10c-d2a3741cdf75"}`)
 
-	config, err := ParseConfig(resp)
+	config, err := ParseConfig(resp.Bytes())
 
 	if err != nil {
 		t.Error(err)
@@ -168,7 +165,7 @@ func TestParseControllerConfigGood(t *testing.T) {
 }
 
 func TestTimeSerialize(t *testing.T) {
-	time, err := json.Marshal(&dtime.Time{time.Now().UTC()})
+	time, err := json.Marshal(&dtime.Time{Time: time.Now().UTC()})
 
 	if err != nil {
 		t.Errorf("expected to be able to serialize time as json, got '%v'", err)

@@ -5,6 +5,8 @@ Data models for the Deis API.
 """
 
 from __future__ import unicode_literals
+import base64
+from datetime import datetime
 import etcd
 import importlib
 import logging
@@ -16,21 +18,20 @@ import threading
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError, SuspiciousOperation
 from django.db import models
 from django.db.models import Count
 from django.db.models import Max
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils.encoding import python_2_unicode_compatible
-from django_fsm import FSMField, transition
-from django_fsm.signals import post_transition
-from docker.utils import utils
+from docker.utils import utils as dockerutils
 from json_field.fields import JSONField
+from OpenSSL import crypto
 import requests
 from rest_framework.authtoken.models import Token
 
-from api import fields
+from api import fields, utils
 from registry import publish_release
 from utils import dict_diff, fingerprint
 
@@ -38,10 +39,46 @@ from utils import dict_diff, fingerprint
 logger = logging.getLogger(__name__)
 
 
+def close_db_connections(func, *args, **kwargs):
+    """
+    Decorator to explicitly close db connections during threaded execution
+
+    Note this is necessary to work around:
+    https://code.djangoproject.com/ticket/22420
+    """
+    def _close_db_connections(*args, **kwargs):
+        ret = None
+        try:
+            ret = func(*args, **kwargs)
+        finally:
+            from django.db import connections
+            for conn in connections.all():
+                conn.close()
+        return ret
+    return _close_db_connections
+
+
 def log_event(app, msg, level=logging.INFO):
-    msg = "{}: {}".format(app.id, msg)
-    logger.log(level, msg)  # django logger
-    app.log(msg)            # local filesystem
+    # controller needs to know which app this log comes from
+    logger.log(level, "{}: {}".format(app.id, msg))
+    app.log(msg)
+
+
+def validate_base64(value):
+    """Check that value contains only valid base64 characters."""
+    try:
+        base64.b64decode(value.split()[1])
+    except Exception as e:
+        raise ValidationError(e)
+
+
+def validate_id_is_docker_compatible(value):
+    """
+    Check that the ID follows docker's image name constraints
+    """
+    match = re.match(r'^[a-z0-9-]+$', value)
+    if not match:
+        raise ValidationError("App IDs can only contain [a-z0-9-].")
 
 
 def validate_app_structure(value):
@@ -52,6 +89,12 @@ def validate_app_structure(value):
                 raise ValueError("Must be greater than or equal to zero")
     except ValueError, err:
         raise ValidationError(err)
+
+
+def validate_reserved_names(value):
+    """A value cannot use some reserved names."""
+    if value in ['deis']:
+        raise ValidationError('{} is a reserved name.'.format(value))
 
 
 def validate_comma_separated(value):
@@ -67,6 +110,13 @@ def validate_domain(value):
     """Error if the domain contains unexpected characters."""
     if not re.search(r'^[a-zA-Z0-9-\.]+$', value):
         raise ValidationError('"{}" contains unexpected characters'.format(value))
+
+
+def validate_certificate(value):
+    try:
+        crypto.load_certificate(crypto.FILETYPE_PEM, value)
+    except crypto.Error as e:
+        raise ValidationError('Could not load certificate: {}'.format(e))
 
 
 class AuditedModel(models.Model):
@@ -97,25 +147,24 @@ class App(UuidAuditedModel):
     """
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL)
-    id = models.SlugField(max_length=64, unique=True)
+    id = models.SlugField(max_length=64, unique=True, default=utils.generate_app_name,
+                          validators=[validate_id_is_docker_compatible,
+                                      validate_reserved_names])
     structure = JSONField(default={}, blank=True, validators=[validate_app_structure])
 
     class Meta:
         permissions = (('use_app', 'Can use app'),)
 
-    def __str__(self):
-        return self.id
-
-    def _get_scheduler(self, *args, **kwargs):
-        module_name = 'scheduler.' + settings.SCHEDULER_MODULE
-        mod = importlib.import_module(module_name)
-
+    @property
+    def _scheduler(self):
+        mod = importlib.import_module(settings.SCHEDULER_MODULE)
         return mod.SchedulerClient(settings.SCHEDULER_TARGET,
                                    settings.SCHEDULER_AUTH,
                                    settings.SCHEDULER_OPTIONS,
                                    settings.SSH_PRIVATE_KEY)
 
-    _scheduler = property(_get_scheduler)
+    def __str__(self):
+        return self.id
 
     @property
     def url(self):
@@ -141,8 +190,11 @@ class App(UuidAuditedModel):
 
     def delete(self, *args, **kwargs):
         """Delete this application including all containers"""
-        for c in self.container_set.exclude(type='run'):
-            c.destroy()
+        try:
+            # attempt to remove containers from the scheduler
+            self._destroy_containers([c for c in self.container_set.exclude(type='run')])
+        except RuntimeError:
+            pass
         self._clean_app_logs()
         return super(App, self).delete(*args, **kwargs)
 
@@ -202,7 +254,8 @@ class App(UuidAuditedModel):
             if to_remove:
                 self._destroy_containers(to_remove)
         # save new structure to the database
-        vals = self.container_set.values('type').annotate(Count('pk')).order_by()
+        vals = self.container_set.exclude(type='run').values(
+            'type').annotate(Count('pk')).order_by()
         self.structure = {v['type']: v['pk__count'] for v in vals}
         self.save()
         return changed
@@ -211,30 +264,36 @@ class App(UuidAuditedModel):
         """Creates and starts containers via the scheduler"""
         create_threads = []
         start_threads = []
+        if not to_add:
+            # do nothing if we didn't request any containers
+            return
         for c in to_add:
             create_threads.append(threading.Thread(target=c.create))
             start_threads.append(threading.Thread(target=c.start))
         [t.start() for t in create_threads]
         [t.join() for t in create_threads]
-        if set([c.state for c in to_add]) != set([Container.CREATED]):
+        if set([c.state for c in to_add]) != set(['created']):
             err = 'aborting, failed to create some containers'
             log_event(self, err, logging.ERROR)
             raise RuntimeError(err)
         [t.start() for t in start_threads]
         [t.join() for t in start_threads]
-        if set([c.state for c in to_add]) != set([Container.UP]):
+        if set([c.state for c in to_add]) != set(['up']):
             err = 'warning, some containers failed to start'
             log_event(self, err, logging.WARNING)
 
     def _destroy_containers(self, to_destroy):
         """Destroys containers via the scheduler"""
         destroy_threads = []
+        if not to_destroy:
+            # do nothing if we didn't request any containers
+            return
         for c in to_destroy:
             destroy_threads.append(threading.Thread(target=c.destroy))
         [t.start() for t in destroy_threads]
         [t.join() for t in destroy_threads]
-        [c.delete() for c in to_destroy if c.state == Container.DESTROYED]
-        if set([c.state for c in to_destroy]) != set([Container.DESTROYED]):
+        [c.delete() for c in to_destroy if c.state == 'destroyed']
+        if set([c.state for c in to_destroy]) != set(['destroyed']):
             err = 'aborting, failed to destroy some containers'
             log_event(self, err, logging.ERROR)
             raise RuntimeError(err)
@@ -248,32 +307,7 @@ class App(UuidAuditedModel):
             n.save()
             new.append(n)
 
-        # create new containers
-        threads = []
-        for c in new:
-            threads.append(threading.Thread(target=c.create))
-        [t.start() for t in threads]
-        [t.join() for t in threads]
-
-        # check for containers that failed to create
-        if len(new) > 0 and set([c.state for c in new]) != set([Container.CREATED]):
-            err = 'aborting, failed to create some containers'
-            log_event(self, err, logging.ERROR)
-            self._destroy_containers(new)
-            raise RuntimeError(err)
-
-        # start new containers
-        threads = []
-        for c in new:
-            threads.append(threading.Thread(target=c.start))
-        [t.start() for t in threads]
-        [t.join() for t in threads]
-
-        # check for containers that didn't come up correctly
-        if len(new) > 0 and set([c.state for c in new]) != set([Container.UP]):
-            # report the deploy error
-            err = 'warning, some containers failed to start'
-            log_event(self, err, logging.WARNING)
+        self._start_containers(new)
 
         # destroy old containers
         if existing:
@@ -303,12 +337,12 @@ class App(UuidAuditedModel):
 
         self.scale(user, structure)
 
-    def logs(self):
+    def logs(self, log_lines):
         """Return aggregated log data for this application."""
         path = os.path.join(settings.DEIS_LOG_DIR, self.id + '.log')
         if not os.path.exists(path):
             raise EnvironmentError('Could not locate logs')
-        data = subprocess.check_output(['tail', '-n', str(settings.LOG_LINES), path])
+        data = subprocess.check_output(['tail', '-n', log_lines, path])
         return data
 
     def run(self, user, command):
@@ -334,7 +368,7 @@ class App(UuidAuditedModel):
 
         # check for backwards compatibility
         def _has_hostname(image):
-            repo, tag = utils.parse_repository_tag(image)
+            repo, tag = dockerutils.parse_repository_tag(image)
             return True if '/' in repo and '.' in repo.split('/')[0] else False
 
         if not _has_hostname(image):
@@ -351,30 +385,20 @@ class Container(UuidAuditedModel):
     """
     Docker container used to securely host an application process.
     """
-    INITIALIZED = 'initialized'
-    CREATED = 'created'
-    UP = 'up'
-    DOWN = 'down'
-    DESTROYED = 'destroyed'
-    CRASHED = 'crashed'
-    ERROR = 'error'
-    STATE_CHOICES = (
-        (INITIALIZED, 'initialized'),
-        (CREATED, 'created'),
-        (UP, 'up'),
-        (DOWN, 'down'),
-        (DESTROYED, 'destroyed'),
-        (CRASHED, 'crashed'),
-        (ERROR, 'error'),
-    )
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL)
     app = models.ForeignKey('App')
     release = models.ForeignKey('Release')
     type = models.CharField(max_length=128, blank=False)
     num = models.PositiveIntegerField()
-    state = FSMField(default=INITIALIZED, choices=STATE_CHOICES,
-                     protected=True, propagate=False)
+
+    @property
+    def _scheduler(self):
+        return self.app._scheduler
+
+    @property
+    def state(self):
+        return self._scheduler.state(self._job_id).name
 
     def short_name(self):
         return "{}.{}.{}".format(self.app.id, self.type, self.num)
@@ -396,11 +420,6 @@ class Container(UuidAuditedModel):
         return job_id
 
     _job_id = property(_get_job_id)
-
-    def _get_scheduler(self):
-        return self.app._scheduler
-
-    _scheduler = property(_get_scheduler)
 
     def _get_command(self):
         try:
@@ -426,7 +445,7 @@ class Container(UuidAuditedModel):
                                      num=self.num)
         return c
 
-    @transition(field=state, source=INITIALIZED, target=CREATED, on_error=ERROR)
+    @close_db_connections
     def create(self):
         image = self.release.image
         kwargs = {'memory': self.release.config.memory,
@@ -444,7 +463,7 @@ class Container(UuidAuditedModel):
             log_event(self.app, err, logging.ERROR)
             raise
 
-    @transition(field=state, source=[CREATED, UP, DOWN], target=UP, on_error=CRASHED)
+    @close_db_connections
     def start(self):
         job_id = self._job_id
         try:
@@ -454,7 +473,7 @@ class Container(UuidAuditedModel):
             log_event(self.app, err, logging.WARNING)
             raise
 
-    @transition(field=state, source=UP, target=DOWN, on_error=ERROR)
+    @close_db_connections
     def stop(self):
         job_id = self._job_id
         try:
@@ -464,7 +483,7 @@ class Container(UuidAuditedModel):
             log_event(self.app, err, logging.ERROR)
             raise
 
-    @transition(field=state, source='*', target=DESTROYED, on_error=ERROR)
+    @close_db_connections
     def destroy(self):
         job_id = self._job_id
         try:
@@ -562,6 +581,19 @@ class Build(UuidAuditedModel):
             new_release.delete()
             raise
 
+    def save(self, **kwargs):
+        try:
+            previous_build = self.app.build_set.latest()
+            to_destroy = []
+            for proctype in previous_build.procfile.keys():
+                if proctype not in self.procfile.keys():
+                    for c in self.app.container_set.filter(type=proctype):
+                        to_destroy.append(c)
+            self.app._destroy_containers(to_destroy)
+        except Build.DoesNotExist:
+            pass
+        return super(Build, self).save(**kwargs)
+
     def __str__(self):
         return "{0}-{1}".format(self.app.id, self.uuid[:7])
 
@@ -587,6 +619,29 @@ class Config(UuidAuditedModel):
 
     def __str__(self):
         return "{}-{}".format(self.app.id, self.uuid[:7])
+
+    def save(self, **kwargs):
+        """merge the old config with the new"""
+        try:
+            previous_config = self.app.config_set.latest()
+            for attr in ['cpu', 'memory', 'tags', 'values']:
+                # Guard against migrations from older apps without fixes to
+                # JSONField encoding.
+                try:
+                    data = getattr(previous_config, attr).copy()
+                except AttributeError:
+                    data = {}
+                try:
+                    new_data = getattr(self, attr).copy()
+                except AttributeError:
+                    new_data = {}
+                data.update(new_data)
+                # remove config keys if we provided a null value
+                [data.pop(k) for k, v in new_data.items() if v is None]
+                setattr(self, attr, data)
+        except Config.DoesNotExist:
+            pass
+        return super(Config, self).save(**kwargs)
 
 
 @python_2_unicode_compatible
@@ -634,7 +689,7 @@ class Release(UuidAuditedModel):
             release.publish()
         except EnvironmentError as e:
             # If we cannot publish this app, just log and carry on
-            logger.info(e)
+            log_event(self.app, e)
             pass
         return release
 
@@ -780,19 +835,56 @@ class Domain(AuditedModel):
 
 
 @python_2_unicode_compatible
+class Certificate(AuditedModel):
+    """
+    Public and private key pair used to secure application traffic at the router.
+    """
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL)
+    # there is no upper limit on the size of an x.509 certificate
+    certificate = models.TextField(validators=[validate_certificate])
+    key = models.TextField()
+    # X.509 certificates allow any string of information as the common name.
+    common_name = models.TextField(unique=True)
+    expires = models.DateTimeField()
+
+    def __str__(self):
+        return self.common_name
+
+    def _get_certificate(self):
+        try:
+            return crypto.load_certificate(crypto.FILETYPE_PEM, self.certificate)
+        except crypto.Error as e:
+            raise SuspiciousOperation(e)
+
+    def save(self, *args, **kwargs):
+        certificate = self._get_certificate()
+        if not self.common_name:
+            self.common_name = certificate.get_subject().CN
+        if not self.expires:
+            # convert openssl's expiry date format to Django's DateTimeField format
+            self.expires = datetime.strptime(certificate.get_notAfter(), '%Y%m%d%H%M%SZ')
+        return super(Certificate, self).save(*args, **kwargs)
+
+
+@python_2_unicode_compatible
 class Key(UuidAuditedModel):
     """An SSH public key."""
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL)
     id = models.CharField(max_length=128)
-    public = models.TextField(unique=True)
+    public = models.TextField(unique=True, validators=[validate_base64])
+    fingerprint = models.CharField(max_length=128)
 
     class Meta:
         verbose_name = 'SSH Key'
-        unique_together = (('owner', 'id'))
+        unique_together = (('owner', 'fingerprint'))
 
     def __str__(self):
         return "{}...{}".format(self.public[:18], self.public[-31:])
+
+    def save(self, *args, **kwargs):
+        self.fingerprint = fingerprint(self.public)
+        return super(Key, self).save(*args, **kwargs)
 
 
 # define update/delete callbacks for synchronizing
@@ -801,36 +893,45 @@ class Key(UuidAuditedModel):
 def _log_build_created(**kwargs):
     if kwargs.get('created'):
         build = kwargs['instance']
-        log_event(build.app, "build {} created".format(build))
+        # log only to the controller; this event will be logged in the release summary
+        logger.info("{}: build {} created".format(build.app, build))
 
 
 def _log_release_created(**kwargs):
     if kwargs.get('created'):
         release = kwargs['instance']
-        log_event(release.app, "release {} created".format(release))
+        # log only to the controller; this event will be logged in the release summary
+        logger.info("{}: release {} created".format(release.app, release))
         # append release lifecycle logs to the app
         release.app.log(release.summary)
 
 
 def _log_config_updated(**kwargs):
     config = kwargs['instance']
-    log_event(config.app, "config {} updated".format(config))
+    # log only to the controller; this event will be logged in the release summary
+    logger.info("{}: config {} updated".format(config.app, config))
 
 
 def _log_domain_added(**kwargs):
     domain = kwargs['instance']
     msg = "domain {} added".format(domain)
     log_event(domain.app, msg)
-    # adding a domain does not create a release, so we have to log here
-    domain.app.log(msg)
 
 
 def _log_domain_removed(**kwargs):
     domain = kwargs['instance']
     msg = "domain {} removed".format(domain)
     log_event(domain.app, msg)
-    # adding a domain does not create a release, so we have to log here
-    domain.app.log(msg)
+
+
+def _log_cert_added(**kwargs):
+    cert = kwargs['instance']
+    logger.info("cert {} added".format(cert))
+
+
+def _log_cert_removed(**kwargs):
+    cert = kwargs['instance']
+    logger.info("cert {} removed".format(cert))
 
 
 def _etcd_publish_key(**kwargs):
@@ -841,8 +942,11 @@ def _etcd_publish_key(**kwargs):
 
 def _etcd_purge_key(**kwargs):
     key = kwargs['instance']
-    _etcd_client.delete('/deis/builder/users/{}/{}'.format(
-        key.owner.username, fingerprint(key.public)))
+    try:
+        _etcd_client.delete('/deis/builder/users/{}/{}'.format(
+            key.owner.username, fingerprint(key.public)))
+    except KeyError:
+        pass
 
 
 def _etcd_purge_user(**kwargs):
@@ -863,25 +967,41 @@ def _etcd_create_app(**kwargs):
 
 def _etcd_purge_app(**kwargs):
     appname = kwargs['instance']
-    _etcd_client.delete('/deis/services/{}'.format(appname), dir=True, recursive=True)
+    try:
+        _etcd_client.delete('/deis/services/{}'.format(appname), dir=True, recursive=True)
+    except KeyError:
+        pass
+
+
+def _etcd_publish_cert(**kwargs):
+    cert = kwargs['instance']
+    if kwargs['created']:
+        _etcd_client.write('/deis/certs/{}/cert'.format(cert), cert.certificate)
+        _etcd_client.write('/deis/certs/{}/key'.format(cert), cert.key)
+
+
+def _etcd_purge_cert(**kwargs):
+    cert = kwargs['instance']
+    try:
+        _etcd_client.delete('/deis/certs/{}'.format(cert),
+                            prevExist=True, dir=True, recursive=True)
+    except KeyError:
+        pass
 
 
 def _etcd_publish_domains(**kwargs):
-    app = kwargs['instance'].app
-    app_domains = app.domain_set.all()
-    if app_domains:
-        _etcd_client.write('/deis/domains/{}'.format(app),
-                           ' '.join(str(d.domain) for d in app_domains))
+    domain = kwargs['instance']
+    if kwargs['created']:
+        _etcd_client.write('/deis/domains/{}'.format(domain), domain.app)
 
 
 def _etcd_purge_domains(**kwargs):
-    app = kwargs['instance'].app
-    app_domains = app.domain_set.all()
-    if app_domains:
-        _etcd_client.write('/deis/domains/{}'.format(app),
-                           ' '.join(str(d.domain) for d in app_domains))
-    else:
-        _etcd_client.delete('/deis/domains/{}'.format(app))
+    domain = kwargs['instance']
+    try:
+        _etcd_client.delete('/deis/domains/{}'.format(domain),
+                            prevExist=True, dir=True, recursive=True)
+    except KeyError:
+        pass
 
 
 # Log significant app-related events
@@ -889,7 +1009,9 @@ post_save.connect(_log_build_created, sender=Build, dispatch_uid='api.models.log
 post_save.connect(_log_release_created, sender=Release, dispatch_uid='api.models.log')
 post_save.connect(_log_config_updated, sender=Config, dispatch_uid='api.models.log')
 post_save.connect(_log_domain_added, sender=Domain, dispatch_uid='api.models.log')
+post_save.connect(_log_cert_added, sender=Certificate, dispatch_uid='api.models.log')
 post_delete.connect(_log_domain_removed, sender=Domain, dispatch_uid='api.models.log')
+post_delete.connect(_log_cert_removed, sender=Certificate, dispatch_uid='api.models.log')
 
 
 # automatically generate a new token on creation
@@ -897,17 +1019,6 @@ post_delete.connect(_log_domain_removed, sender=Domain, dispatch_uid='api.models
 def create_auth_token(sender, instance=None, created=False, **kwargs):
     if created:
         Token.objects.create(user=instance)
-
-
-# save FSM transitions as they happen
-def _save_transition(**kwargs):
-    kwargs['instance'].save()
-    # close database connections after transition
-    # to avoid leaking connections inside threads
-    from django.db import connection
-    connection.close()
-
-post_transition.connect(_save_transition)
 
 # wire up etcd publishing if we can connect
 try:
@@ -925,3 +1036,5 @@ if _etcd_client:
     post_delete.connect(_etcd_purge_domains, sender=Domain, dispatch_uid='api.models')
     post_save.connect(_etcd_create_app, sender=App, dispatch_uid='api.models')
     post_delete.connect(_etcd_purge_app, sender=App, dispatch_uid='api.models')
+    post_save.connect(_etcd_publish_cert, sender=Certificate, dispatch_uid='api.models')
+    post_delete.connect(_etcd_purge_cert, sender=Certificate, dispatch_uid='api.models')
